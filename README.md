@@ -1,181 +1,251 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">
-    <img alt="python-package-template: start every Python package green, from the first commit" src="docs/images/banner-light.png" width="100%">
+    <img alt="kea: a second brain that checks its facts" src="docs/images/banner-light.png" width="100%">
   </picture>
 </p>
 
 <p align="center">
-  <a href="https://github.com/jpsanders/python-package-template/actions/workflows/dev.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/jpsanders/python-package-template/dev.yml?branch=main&label=CI&logo=github"></a>
-  <a href="https://github.com/jpsanders/python-package-template/releases/latest"><img alt="Release 1.0.0" src="https://img.shields.io/badge/release-1.0.0-a95719"></a>
-  <a href="https://www.python.org/downloads/"><img alt="Python 3.14 and 3.15" src="https://img.shields.io/badge/python-3.14%20%7C%203.15-3776AB?logo=python&logoColor=white"></a>
-  <a href="https://github.com/new?template_name=python-package-template&template_owner=jpsanders"><img alt="Use this template" src="https://img.shields.io/badge/use%20this-template-1c1611?logo=github"></a>
-  <a href="#with-an-ai-agent"><img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-a95719"></a>
+  <a href="https://github.com/jpsanders/kea/actions/workflows/dev.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/jpsanders/kea/dev.yml?branch=main&label=CI&logo=github"></a>
+  <a href="https://github.com/jpsanders/kea/releases/latest"><img alt="Release 1.0.0" src="https://img.shields.io/badge/release-1.0.0-a95719"></a>
+  <a href="https://www.python.org/downloads/"><img alt="Python 3.15" src="https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white"></a>
+  <a href="pyproject.toml"><img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-2e7d32"></a>
+  <a href="#use-it-with-your-ai-agent"><img alt="MCP server" src="https://img.shields.io/badge/MCP-server-1c1611"></a>
+  <a href="#use-it-with-your-ai-agent"><img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-a95719"></a>
+  <a href="skills/"><img alt="Agent skills" src="https://img.shields.io/badge/agent-skills-1c1611"></a>
   <a href="https://mypy-lang.org/"><img alt="mypy strict" src="https://img.shields.io/badge/mypy-strict-2a6db2"></a>
   <a href="https://github.com/psf/black"><img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000"></a>
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue"></a>
-  <a href="https://github.com/jpsanders/python-package-template/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/jpsanders/python-package-template"></a>
-  <a href="https://github.com/jpsanders/python-package-template/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/jpsanders/python-package-template?style=flat&logo=github&color=a95719"></a>
+  <a href="https://github.com/jpsanders/kea/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/jpsanders/kea"></a>
+  <a href="https://github.com/jpsanders/kea/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/jpsanders/kea?style=flat&logo=github&color=a95719"></a>
 </p>
 
-A GitHub template for Python packages that are green from their first commit. Python 3.15 first, mypy in strict mode,
-nine checks that run the same on your machine as in CI, a man page built from one Markdown manual, a release workflow
-that attaches the wheel, and the files an AI agent needs to work in the repository without guessing.
+**Your AI agent remembers everything you told it, including the things that were never true.** kea is a second
+brain for you and your agents that keeps the difference: every fact carries a source and a date, every decision
+carries the day you will look at it again, every prediction gets scored against what happened, and every big plan
+faces a council of rival AI models before you commit. It also makes everything you ever said to Claude Code, Codex,
+OpenCode, ChatGPT and Claude searchable, on your machine.
+
+Plain Markdown in a folder you own. One Python package with no dependencies. A CLI, an MCP server, three agent skills
+and a Claude Code plugin.
 
 ```sh
-gh repo create acme-widgets --template jpsanders/python-package-template --private --clone && cd acme-widgets
-python3 scripts/rename.py acme_widgets
-python3.15 -m venv .venv && . .venv/bin/activate && make init-dev && make man && make checks
+uv tool install git+https://github.com/jpsanders/kea      # uv fetches Python 3.15 if you lack it
+kea init ~/tidewater --example && cd ~/tidewater && kea status
 ```
+
+```text
+kea Tidewater Coffee · ~/tidewater
+  state        updated yesterday · 7 facts, 1 past recheck · 2 UNVERIFIED
+  decisions    2 active · 1 due for revisit (D-0002)
+  predictions  3 open · 1 due to score (P-0007) · 6 scored, Brier 0.23 (+7% vs a coin)
+  roadmap      2 waiting for Mara · 3 next · 1 date in 14 days
+  ideas        2 parked
+  plan         second-cafe: reviewed, 3 reviews → kea synth second-cafe
+  council      0 of 6 seats ready · the Chair is your own agent
+  evidence     nothing indexed yet: kea ingest claude-code
+
+health
+  ✓ STATE.md is fresh · last entry yesterday
+  ! facts are sourced and rechecked · 1 of 7 facts past their recheck
+  ! decisions are revisited on time · 1 due
+  ! predictions are scored · 1 past their date
+  ✓ frameworks have boundary conditions · 0 of 1 incomplete
+  ✓ decided plans carry 3 predictions · no decided plans yet
+  3 of 6 checks need attention. Fix the oldest first.
+```
+
+That is the example brain: Tidewater Coffee, a made up roastery deciding whether to open a second cafe. Every number
+in it is invented, and every line above is real output.
 
 ## Why
 
-Setting up a package properly takes an afternoon: formatter, import order, linter, docstring checks, strict types,
-a security scan, tests with coverage, CI that runs the same thing, a release that builds the wheel, documentation
-people can find. Skipping it is how a repository ends up with four styles and a CI nobody trusts. This template is
-that afternoon, done once, and a CI job proves that a copy renamed to `acme_widgets` still passes everything.
+Second brains are good at collecting and bad at checking. Notes pile up, half of them guesses, and an AI agent that
+reads them repeats the guesses back with total confidence. Decisions get made and never revisited. Predictions get
+made and never scored, so nobody learns whether "I'm 80% sure" means anything. And the big calls get validated by one
+model that was trained to agree with you.
 
-## What you get
+kea began as the private system its author works from: a folder of Markdown, a council of free model endpoints and a
+SQLite index over past AI conversations. This repository is that system with the private data taken out, made
+general, tested, and shipped for anyone.
 
-| Check | Tool | What it stops |
-| --- | --- | --- |
-| Formatting | black, 120 columns | Style arguments in review |
-| Import order | isort, black profile | Noisy diffs from reordered imports |
-| Whitespace | editorconfig-checker | Tabs, trailing spaces, missing final newlines and long lines, in every file type |
-| Docstrings | darglint, Sphinx style | A docstring that documents parameters the function no longer takes |
-| Lint | flake8 with pydocstyle and tidy imports | Unused imports and names, docstring style errors, relative imports |
-| Types | mypy, strict | Untyped functions and silent `Any` |
-| Security | bandit | Shell injection, unsafe deserialisation, hardcoded passwords |
-| Manual | `scripts/build_man.py --check` | A man page or packaged guide that no longer matches `docs/MANUAL.md` |
-| Tests | pytest with coverage | Regressions, with a coverage report on every run |
+## What it does
 
-`make checks` runs all nine in CI's order and only reports. `make format` applies black and isort. `make help` lists
-every target.
-
-Around the checks:
-
-- **CI** on every push and pull request: the checks, then pytest on Python 3.14 and 3.15 on Linux and macOS, a run
-  next to a Postgres 18 service for packages that need a database, a job that installs the built wheel in a clean
-  environment and runs it, and a job that renames the package and runs everything again.
-- **Releases**: publish a GitHub release and the wheel and the sdist are built and attached. The version comes from
-  the git tag through setuptools_scm, so there is no version number in the code to forget.
-- **A man page from day one**: `docs/MANUAL.md` is the one source for `<command> guide`, `<command> man` and, after
-  `<command> man --install`, plain `man <command>`.
-- **Agent files**: `AGENTS.md` tells a coding agent the commands, the layout and the rules the checks enforce.
-- **Community files**: a changelog, contributing notes, a security policy with private reporting, a code of conduct,
-  issue forms and monthly Dependabot updates.
-
-## Start a package
-
-1. Click **Use this template** on GitHub, or run:
-
-   ```sh
-   gh repo create acme-widgets --template jpsanders/python-package-template --private --clone
-   cd acme-widgets
-   ```
-
-2. Rename the package. This replaces the import name and the command name in every tracked file, renames the
-   package, test and man page paths, and removes the files that only describe the template:
-
-   ```sh
-   make rename NAME=acme_widgets            # or: python3 scripts/rename.py acme_widgets --dist acme-widgets
-   ```
-
-3. In a virtual environment with Python 3.15 (3.14 works too), install the tools and run every check:
-
-   ```sh
-   make init-dev
-   make man
-   make checks
-   ```
-
-4. Replace the example in `src/acme_widgets/python_pet.py`, rewrite `docs/MANUAL.md` for your command and run
-   `make man`.
-
-`make init` installs the package on its own, without the development tools.
-
-## With an AI agent
-
-The repository is a Claude Code plugin with one skill, `new-python-package`, which walks an agent through steps 1 to 4
-above and the rules to keep afterwards:
-
-```text
-/plugin install python-package-template --marketplace jpsanders/python-package-template
-```
-
-On Claude Code before 2.1.275, add the marketplace first: `/plugin marketplace add jpsanders/python-package-template`,
-then `/plugin install python-package-template@python-package-template`. Other agents can read the skill directly from
-[`skills/new-python-package/SKILL.md`](skills/new-python-package/SKILL.md); Codex and OpenCode load the same file
-from their own skills folders.
-
-Inside a package made from the template, `AGENTS.md` is what an agent reads first. The example command follows the
-conventions an agent relies on: every command takes `--json` and prints one object with stable fields, and
-`<command> guide` prints the whole manual, so an agent can learn the tool without a browser.
-
-## The example command
-
-```text
-$ kea feed --times 2 --json
-{"name": "Baby Python", "hunger": 3, "happiness": 5}
-$ kea guide | head -1
-# kea
-$ kea man --install && man kea
-```
-
-It is a placeholder that shows the shape: one `cmd_*` function per command in `cli.py`, a manual in `docs/MANUAL.md`,
-tests that exercise the command line.
-
-## Layout
-
-```text
-src/kea/        the package, with py.typed so type checkers trust its hints
-src/kea/data/   the packaged manual and man page, generated by make man
-docs/MANUAL.md              the one source for the guide and the man page
-tests/kea/      pytest tests, mirroring the package
-scripts/                    build_man.py, and rename.py for the one time rename
-.github/                    CI from reusable workflows, the release, issue forms, Dependabot
-AGENTS.md                   instructions for coding agents
-Dockerfile                  an image built from source on python:3.15-slim, running without root
-Makefile                    every command in this file
-```
-
-## Versions
-
-Tag a commit with the bare version, `git tag -s 1.0.0 -m 1.0.0`, and `make build` writes a 1.0.0 wheel to
-`build/dist`. Untagged commits build as development versions such as `1.0.1.dev3+g1a2b3c4`. The release workflow
-checks that the README's release badge names the version it is releasing.
-
-## CI details
-
-The building blocks are reusable workflows with inputs, so a single check can be switched off, for example with
-`enable-bandit: false`. To install dependencies from a private package index, store the index URL with its
-credentials as the `PKG_REPOSITORY` secret. CI passes it to pip as an extra index.
-
-## Docker
+**Facts with receipts.** STATE.md holds a facts table (fact, value, source, verified date) and a dated log. Anything
+not checked is marked UNVERIFIED and says how it would be checked. `kea check` lints the lot: unsourced facts, facts
+past their recheck date, stale state.
 
 ```sh
-make build-docker
-docker run --rm kea:latest
+kea fact "Cash on hand" "EUR 18,400" --source "bank export"
+kea log "Five sample bags sent to cafes" --source journal/wholesale-samples.md
 ```
 
-The image runs as an unprivileged user. The build mounts `.git` read only so setuptools_scm can version the install,
-which needs BuildKit, the default builder in current Docker.
+**Decisions that come back.** Every decision carries the reasoning and a revisit date. When the date comes, kea asks
+what happened, how surprising it was, and what changes.
 
-## Notes
+```sh
+kea decide "Test wholesale first" --decision "Five sample bags before any lease" --why "roaster at 40%" --revisit +30d
+kea revisit D-0003 --outcome "Two cafes ordered" --surprise 3 --lesson "Ask for volume, not a yes"
+```
 
-Files that belong to one developer, such as `.envrc` or `.python-version`, go in your global ignore file,
-`~/.gitignore`. The repository's `.gitignore` lists only what the code itself produces.
+**Predictions that get scored.** Write them down with a date and a confidence, score them when the date comes, and
+find out whether your 80% means 80%:
 
-Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+```text
+$ kea calibration
+6 scored predictions · Brier 0.233 (0 is perfect, 0.25 is a coin) · +7% skill over a coin
+said 78% on average, 58% came true: overconfident
+
+  said       count  came true
+  60 to 69%      1  ██████████··········  50%
+  70 to 79%      1  ████████████████████ 100%
+  80 to 89%      2  ····················   0%
+  90 to 100%     2  ████████████████████ 100%
+```
+
+**A council of rival models.** For the decisions that are expensive to reverse, `kea brief` builds one packet with the
+facts, the frameworks the plan names and the plan, and hashes it. `kea council` sends it to every ready seat in
+parallel: Gemini, DeepSeek, OpenAI's open weights on Groq, Mistral, and two local models by default, twelve providers
+preset, any OpenAI compatible server welcome. No seat sees another's review. Your own agent is the Chair: it reviews
+first from the packet alone and writes the synthesis last, including the section on what every seat missed, because
+models that share training data share blind spots.
+
+```text
+$ kea synth second-cafe
+3 of 3 reviews parsed · verdicts: PROCEED_WITH_CHANGES 2, PROCEED 1
+4 recommendations: 1 strong, 0 split, 3 solo
+wrote plans/second-cafe/10-synthesis-scaffold.md · now the Chair writes 11-synthesis.md: what every seat missed
+```
+
+**Search everything you ever told an AI.** `kea ingest` indexes your Claude Code, Codex and OpenCode sessions, your
+ChatGPT and Claude exports, your git history and your notes into SQLite with FTS5, read only, incrementally, with
+credential paths refused and secrets redacted. Every hit points back to its exact file and line, message or commit.
+`kea effort` shows where your attention actually went, project by project.
+
+```sh
+kea ingest claude-code && kea ingest codex && kea ingest git ~/code
+kea search "why did we drop the market stall" --mine
+```
+
+**A roadmap that survives the session.** ROADMAP.md keeps what waits for you apart from what comes next, so an agent
+puts its questions where you will see them instead of guessing. `kea roadmap add "..." --waiting`.
+
+## Use it with your AI agent
+
+kea is built to be used by agents as much as by people. Every command takes `--json`, `kea guide` prints the whole
+manual, and every brain carries an `AGENTS.md` (and a `CLAUDE.md` that imports it) with the rules and the session
+routine.
+
+**Skills** for Claude Code, Codex, OpenCode and any agent that reads `~/.agents/skills`:
+
+```sh
+kea skill install        # kea, kea-council and kea-frameworks, into every agent folder found
+```
+
+**Claude Code plugin**, with the skills and the MCP server in one:
+
+```text
+/plugin marketplace add jpsanders/kea
+/plugin install kea@kea
+```
+
+**MCP server** with 25 tools (search, show, brain_status, log_entry, record_fact, decide, predict, score_prediction,
+roadmap_add, council_run and more), five resources and three prompts:
+
+```sh
+claude mcp add --scope user kea -- kea mcp        # Claude Code
+```
+
+```toml
+# Codex: ~/.codex/config.toml
+[mcp_servers.kea]
+command = "kea"
+args = ["mcp"]
+```
+
+```json
+{"mcpServers": {"kea": {"command": "kea", "args": ["mcp"], "env": {"KEA_BRAIN": "/home/you/brain"}}}}
+```
+
+The JSON works for Cursor (`~/.cursor/mcp.json`), Gemini CLI (`~/.gemini/settings.json`) and Claude Desktop. Without
+kea installed, use `uvx` with `--from git+https://github.com/jpsanders/kea kea mcp`.
+
+## The rules
+
+1. **Verified facts only.** A fact has a source and a date. Everything else is UNVERIFIED and says how to check it.
+2. **Never present an estimate as a measurement.**
+3. **Log decisions** with the reasoning and the day you will look again. Unlogged reasoning does not compound.
+4. **Write predictions down and score them.** A prediction names a number and a date.
+5. **Import distilled, not raw.** Name the decision a source changes before you import it.
+6. **Frameworks only with boundary conditions.** A lens cited outside its stage manufactures confidence.
+7. **Consensus is a signal, not a verdict.** Ask what every seat was trained not to see.
+8. **Ask, do not assume.** Questions for the owner go on the roadmap, never into a guess.
+
+## Install
+
+```sh
+uv tool install git+https://github.com/jpsanders/kea                 # recommended
+pipx install git+https://github.com/jpsanders/kea
+pip install https://github.com/jpsanders/kea/releases/download/1.0.0/kea_brain-1.0.0-py3-none-any.whl
+docker build -t kea . && docker run --rm -it -v ~/brain:/brain kea status
+```
+
+kea needs Python 3.15; uv downloads it for you. The distribution is called `kea-brain` and the command is `kea`.
+Then `kea man --install` makes `man kea` work.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `kea init [path] [--example]` | Make a brain; the first one becomes your default |
+| `kea status` / `kea check` | The whole brain with health checks / lint it, exit 1 on errors |
+| `kea state` / `kea log` / `kea fact` | Facts and the dated log |
+| `kea decide` / `kea decisions` / `kea revisit` | Decisions and closing their loop |
+| `kea predict` / `kea score` / `kea calibration` | Predictions, outcomes, Brier score |
+| `kea roadmap [add\|done]` / `kea idea` | Open work and parked ideas |
+| `kea plan new` / `kea brief` / `kea council` / `kea synth` | A council review, end to end |
+| `kea ingest` / `kea search` / `kea show` / `kea effort` | The evidence index |
+| `kea digest [transcript]` | A Claude Code session as readable files |
+| `kea mcp` / `kea skill install` | Agents |
+| `kea guide` / `kea man` | The full manual, for people and agents |
+
+Everything is in the [manual](docs/MANUAL.md): `kea guide` prints it, `man kea` shows it.
+
+## Privacy
+
+Your brain is a folder you own; the index is a SQLite file inside it that git ignores. kea has no telemetry and no
+account. Ingest opens your sources read only, never opens paths such as `.ssh`, `.aws`, `.env` or `credentials`, and
+redacts anything shaped like a key or a token before storing it. The only thing that ever leaves your machine is a
+council packet, and `kea council` asks before it sends one. API keys travel in headers, never in URLs. More in
+[SECURITY.md](SECURITY.md).
+
+## Performance
+
+One package, the standard library only, and Python 3.15's lazy imports: `kea --version` returns in about 30 ms and
+`kea status` in about 70 ms. Measured on one Linux machine, 1.3 GB of Claude Code transcripts index in under five
+seconds, a second run
+takes a tenth of a second because unchanged files are skipped, and a search over thousands of messages answers in
+about 50 ms. `make bench` measures it on your machine.
+
+## Why the name
+
+The kea is New Zealand's alpine parrot: one of the cleverest birds alive, famous for taking apart whatever it finds to
+see how it works. Its underwings are orange. It is the sibling of [huntaway](https://github.com/jpsanders/huntaway),
+the sheepdog that guards your machine; kea guards your thinking.
 
 ## Star history
 
-<a href="https://star-history.com/#jpsanders/python-package-template&Date">
+<a href="https://star-history.com/#jpsanders/kea&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=jpsanders/python-package-template&type=Date&theme=dark">
-    <img alt="Star history of jpsanders/python-package-template" src="https://api.star-history.com/svg?repos=jpsanders/python-package-template&type=Date">
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=jpsanders/kea&type=Date&theme=dark">
+    <img alt="Star history of jpsanders/kea" src="https://api.star-history.com/svg?repos=jpsanders/kea&type=Date">
   </picture>
 </a>
+
+## Contributing
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Built on
+[python-package-template](https://github.com/jpsanders/python-package-template).
 
 ## Licence
 

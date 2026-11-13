@@ -1,0 +1,6 @@
+# kea's local search index and the council packets stay on this machine.
+.kea/
+council/briefing/
+
+# Session digests can hold private text.
+digests/

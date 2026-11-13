@@ -1,0 +1,14 @@
+{
+  "name": "kea",
+  "description": "A second brain that checks its facts: sourced facts, decisions with revisit dates, scored predictions, a council of rival AI models, and local search over your AI sessions. Three skills and an MCP server.",
+  "version": "1.0.0",
+  "author": {
+    "name": "James Phillip Sanders",
+    "email": "hello@jamesphillipsanders.com",
+    "url": "https://jamesphillipsanders.com"
+  },
+  "homepage": "https://github.com/jpsanders/kea",
+  "repository": "https://github.com/jpsanders/kea",
+  "license": "MIT",
+  "keywords": ["second-brain", "memory", "decisions", "predictions", "calibration", "council", "mcp", "search", "pkm"]
+}

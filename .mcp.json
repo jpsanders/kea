@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kea": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/jpsanders/kea@1.0.0", "kea", "mcp"]
+    }
+  }
+}

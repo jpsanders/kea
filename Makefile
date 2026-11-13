@@ -90,27 +90,35 @@ bandit:
 .PHONY: man-check
 man-check:
 	@echo
-	@echo --- Man page and packaged manual up to date ---
+	@echo --- Man page, packaged manual and packaged skills up to date ---
 	python scripts/build_man.py --check
 
-# Build the man page and the packaged manual from docs/MANUAL.md
+# Build the man page, the packaged manual and the packaged skills from docs/MANUAL.md and skills/
 .PHONY: man
 man:
 	@echo
 	@echo --- Build the man page ---
 	python scripts/build_man.py
 
+# How fast kea starts and answers: lazy imports keep it light
+.PHONY: bench
+bench:
+	@echo
+	@echo --- Start up and command times, best of 15 runs ---
+	python scripts/bench.py
+
+# Make the example brain in /tmp/kea-demo and show it
+.PHONY: demo
+demo:
+	@echo
+	rm -rf /tmp/kea-demo && kea init /tmp/kea-demo --example --no-default --no-git >/dev/null
+	cd /tmp/kea-demo && kea status && kea calibration && kea synth second-cafe
+
 .PHONY: build
 build: clean
 	@echo
 	@echo --- Build package wheel ---
 	python -m build -o build/dist
-
-# Rename the package once, right after creating a repository from the template
-.PHONY: rename
-rename:
-	@test -n "$(NAME)" || (echo "usage: make rename NAME=your_package" && exit 1)
-	python scripts/rename.py $(NAME)
 
 .PHONY: build-docker
 build-docker:

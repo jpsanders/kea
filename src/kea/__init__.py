@@ -1,8 +1,8 @@
-"""A small example package. Rename it with ``make rename NAME=your_package`` and replace the code."""
-
-from importlib.metadata import PackageNotFoundError, version
+"""kea: a second brain that checks its facts."""
 
 try:
-    __version__ = version("kea")
-except PackageNotFoundError:  # running from a source tree that was never installed
+    from kea._version import __version__
+except ImportError:  # a source tree that was never installed
     __version__ = "0.0.0"
+
+__all__ = ["__version__"]

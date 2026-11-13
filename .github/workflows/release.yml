@@ -22,15 +22,49 @@ jobs:
         with:
           python-version: "3.15"
 
-      - name: "Check the README badge names this version"
-        run: grep -q "badge/release-${{ github.event.release.tag_name }}-" README.md
+      - name: "Check the README badge, the plugin, the MCP config and the changelog all name this version"
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          grep -q "badge/release-${TAG}-" README.md
+          grep -q "\"version\": \"${TAG}\"" .claude-plugin/plugin.json
+          grep -q "\"version\": \"${TAG}\"" .claude-plugin/marketplace.json
+          grep -q "kea@${TAG}\"" .mcp.json
+          grep -q "releases/download/${TAG}/kea_brain-${TAG}-py3-none-any.whl" README.md
+          grep -q "^## ${TAG} " CHANGELOG.md
 
       - name: "Build the wheel and the sdist"
         run: |
           python -m pip install build
           python -m build -o dist
+          test -f "dist/kea_brain-${{ github.event.release.tag_name }}-py3-none-any.whl"
 
       - name: "Attach them to the release"
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+
+      - name: "Keep the files for the PyPI job"
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  # Publishes kea-brain to PyPI through trusted publishing. Off until the repository variable PUBLISH_TO_PYPI is
+  # "true" and pypi.org lists this workflow as a trusted publisher for the kea-brain project.
+  pypi:
+    needs: assets
+    if: ${{ vars.PUBLISH_TO_PYPI == 'true' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: "Fetch the built files"
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: "Publish to PyPI"
+        uses: pypa/gh-action-pypi-publish@release/v1

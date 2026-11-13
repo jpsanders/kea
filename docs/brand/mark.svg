@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="kea">
+  <title>kea</title>
+  <path d="M110 104C84 70 54 46 12 36C26 74 56 110 96 134Z" fill="#a95719"/>
+  <path d="M104 84C70 100 62 150 82 182H132C146 156 150 116 140 92Z" fill="#1c1611"/>
+  <circle cx="124" cy="64" r="34" fill="#1c1611"/>
+  <path d="M84 172 58 196H102Z" fill="#1c1611"/>
+  <path d="M150 46C172 40 190 54 188 82C187 96 180 106 170 110C176 98 176 88 169 81C164 77 158 76 151 77Z" fill="#6f6459"/>
+  <circle cx="133" cy="57" r="6.5" fill="#f9f6f0"/>
+  <circle cx="134.5" cy="57" r="3" fill="#1c1611"/>
+  <path d="M36 191H172" stroke="#6f6459" stroke-width="6" stroke-linecap="round"/>
+</svg>

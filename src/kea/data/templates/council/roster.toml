@@ -1,0 +1,78 @@
+# The council: seats that each review a plan's packet alone. The Chair is the agent you work with (Claude Code,
+# Codex, OpenCode...): it reviews first, from the packet only, and writes the synthesis last.
+#
+# Lineage matters more than raw strength: six models from one lab give one opinion in six voices.
+#
+# provider: openai, anthropic, gemini, mistral, groq, cerebras, nvidia, openrouter, deepseek, xai, ollama, lmstudio,
+#           or any OpenAI compatible server with base_url (and key_env when it needs a key).
+# A seat whose key variable is not set is skipped. Check them with: kea seats --probe
+#
+# What you send: the packet holds the files in [brief] include (kea.toml) and the plan. Free tiers may keep or train
+# on what they receive. Send personal data only to local models (ollama, lmstudio) or providers whose terms you read.
+
+[[seat]]
+name = "strategist"
+role = "Strategist"
+lens = "Market, positioning, pricing. Challenge the go to market, not the details."
+provider = "gemini"
+model = "gemini-flash-latest"
+
+[[seat]]
+name = "researcher"
+role = "Researcher"
+lens = "Precedent. Find the historical analogue and the prior art, and say how it went."
+provider = "deepseek"
+model = "deepseek-chat"
+
+[[seat]]
+name = "contrarian"
+role = "Contrarian"
+lens = "First principles. Argue the plan will fail. Attack the load bearing assumptions, not the details."
+provider = "groq"
+model = "openai/gpt-oss-120b"
+
+[[seat]]
+name = "operator"
+role = "Operator"
+lens = "Execution and unit economics. Hours, money, sequencing, cash timing. Assume nothing runs on schedule."
+provider = "mistral"
+model = "mistral-small-latest"
+
+[[seat]]
+name = "skeptic"
+role = "Risk Officer"
+lens = "Every way this kills the business, ranked by probability times impact. Name the unrecoverable ones."
+provider = "ollama"
+model = "qwen3"
+
+[[seat]]
+name = "generalist"
+role = "Independent Baseline"
+lens = "No special lens. Read the plan cold and say what a competent outsider would say."
+provider = "ollama"
+model = "llama3.3"
+
+# More seats to swap in:
+#
+# [[seat]]
+# name = "anthropic"
+# provider = "anthropic"
+# model = "claude-sonnet-5-5"
+#
+# [[seat]]
+# name = "nvidia"
+# provider = "nvidia"
+# model = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+#
+# [[seat]]
+# name = "own-server"
+# provider = "openai"
+# base_url = "http://localhost:8080/v1"
+# model = "my-model"
+
+[rate_limits]
+# Seconds between two calls to the same provider. Free tiers are strict; raise these on a 429.
+gemini = 5
+groq = 3
+mistral = 5
+nvidia = 45

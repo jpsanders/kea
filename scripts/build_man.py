@@ -1,11 +1,12 @@
 """
-Build the man page and the packaged manual from docs/MANUAL.md.
+Build the man page, the packaged manual and the packaged skills from their one source each.
 
-docs/MANUAL.md is the one source. It is copied into the package, so ``kea guide`` prints it, and converted
-to roff, so ``kea man`` and ``man kea`` show it.
+docs/MANUAL.md is copied into the package, so ``kea guide`` prints it, and converted to roff, so ``kea man`` and
+``man kea`` show it. Each ``skills/<name>/SKILL.md`` is copied into the package, so ``kea skill install`` can put it
+where agents look.
 
-    python scripts/build_man.py           # write the packaged manual and the man page
-    python scripts/build_man.py --check   # fail when either is out of date
+    python scripts/build_man.py           # write the generated files
+    python scripts/build_man.py --check   # fail when any is out of date
 """
 
 import argparse
@@ -19,6 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 MANUAL = ROOT / "docs" / "MANUAL.md"
 PACKAGED = ROOT / "src" / PACKAGE / "data" / "MANUAL.md"
 MANPAGE = ROOT / "src" / PACKAGE / "data" / f"{PROG}.1"
+SKILLS = ROOT / "skills"
+PACKAGED_SKILLS = ROOT / "src" / PACKAGE / "data" / "skills"
 
 
 def _escape(text: str) -> str:
@@ -122,16 +125,23 @@ def main() -> int:
 
     :returns: Exit code
     """
-    parser = argparse.ArgumentParser(description="Build the man page and the packaged manual.")
+    parser = argparse.ArgumentParser(description="Build the man page, the packaged manual and the packaged skills.")
     parser.add_argument("--check", action="store_true", help="fail when a generated file is out of date")
     args = parser.parse_args()
     manual = MANUAL.read_text(encoding="utf-8")
     wanted = {PACKAGED: manual, MANPAGE: to_roff(manual)}
+    for skill in sorted(SKILLS.glob("*/SKILL.md")):
+        wanted[PACKAGED_SKILLS / skill.parent.name / "SKILL.md"] = skill.read_text(encoding="utf-8")
     stale = [p for p, text in wanted.items() if not p.is_file() or p.read_text(encoding="utf-8") != text]
+    extra = [p for p in PACKAGED_SKILLS.glob("*/SKILL.md") if p not in wanted]
+    stale += extra
     if args.check:
         for path in stale:
             print(f"out of date: {path.relative_to(ROOT)} (run: make man)", file=sys.stderr)
         return 1 if stale else 0
+    for path in extra:
+        path.unlink()
+        print(f"removed {path.relative_to(ROOT)}")
     for path, text in wanted.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")

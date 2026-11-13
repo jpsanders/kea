@@ -1,5 +1,4 @@
 ---
-# This is nearly identical to `python-tests-with-db.yml` and both should be updated in tandem where appropriate.
 name: python-tests
 
 on:
@@ -25,10 +24,6 @@ on:
         type: number
         default: 1
 
-    secrets:
-      package-repo:
-        description: "Package repository authentication token"
-        required: false
 
 jobs:
   test:
@@ -49,8 +44,6 @@ jobs:
           cache-dependency-path: ${{ inputs.cache-dependency-path }}
 
       - name: "Install dependencies"
-        env:
-          PIP_EXTRA_INDEX_URL: ${{ secrets.package-repo }}
         run: |
           make init-dev
 

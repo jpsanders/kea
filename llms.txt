@@ -1,0 +1,19 @@
+# kea
+
+> A second brain that checks its facts, for people and their AI agents. Plain Markdown for sourced facts, decisions
+> with revisit dates, predictions that get scored (Brier score and calibration), a roadmap, and plans reviewed by a
+> council of independent AI models; plus a local SQLite FTS5 index over past Claude Code, Codex and OpenCode
+> sessions, ChatGPT and Claude exports, git history and notes. Python 3.15, no dependencies, MIT.
+
+Install: `uv tool install git+https://github.com/jpsanders/kea`, then `kea init ~/brain` and `kea skill install`.
+Agents: the `kea mcp` server, three skills (kea, kea-council, kea-frameworks), and a Claude Code plugin
+(`/plugin marketplace add jpsanders/kea`, then `/plugin install kea@kea`). Every command takes `--json`.
+
+## Docs
+
+- [README](https://github.com/jpsanders/kea/blob/main/README.md): what kea is, install, agents, privacy
+- [Manual](https://github.com/jpsanders/kea/blob/main/docs/MANUAL.md): every command; the same text as `kea guide`
+- [Skill: kea](https://github.com/jpsanders/kea/blob/main/skills/kea/SKILL.md): how an agent works with a brain
+- [Skill: kea-council](https://github.com/jpsanders/kea/blob/main/skills/kea-council/SKILL.md): a council review
+- [Skill: kea-frameworks](https://github.com/jpsanders/kea/blob/main/skills/kea-frameworks/SKILL.md): adding a lens
+- [AGENTS.md](https://github.com/jpsanders/kea/blob/main/AGENTS.md): working on kea's own code
