@@ -23,7 +23,7 @@ kea is one Python package with no dependencies beyond the standard library. It r
 .SH QUICK START
 .RS 4
 .nf
-uv self update                                          # an older uv knows only 3.15 previews
+uv self update                                          # or brew upgrade uv, or pip install \-U uv
 uv tool install \-\-python 3.15 git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 if missing
 kea init ~/brain                                        # make a brain; it becomes your default
 cd ~/brain && kea status                                # the whole brain at a glance
@@ -227,7 +227,7 @@ kea man
 Show the man page; --install so plain man kea works, --raw for the roff
 .SH FINDING THE BRAIN
 .PP
-kea looks, in order: \fB\-\-brain PATH\fR, then \fB$KEA_BRAIN\fR, then the current folder and each parent, then the default brain named in \fB~/.config/kea/config.toml\fR. The MCP server tries the default before the folders, so a \fBkea.toml\fR in a project an agent works in never takes over. The first real \fBkea init\fR sets the default (\fB\-\-example\fR never does; \fB\-\-default\fR changes it). A folder without \fBkea.toml\fR is never treated as a brain, so notes kea did not make are never touched, and \fBkea init\fR refuses a folder that already holds other files unless you pass \fB\-\-force\fR.
+kea looks, in order: \fB\-\-brain PATH\fR, then \fB$KEA_BRAIN\fR, then the current folder and each parent, then the default brain named in \fB~/.config/kea/config.toml\fR. The MCP server tries the default before the folders, so a \fBkea.toml\fR in a project an agent works in never takes over. The first real \fBkea init\fR sets the default (\fB\-\-example\fR never does; \fB\-\-default\fR changes it). A folder without \fBkea.toml\fR is never treated as a brain, so notes kea did not make are never touched, and \fBkea init\fR refuses a folder that already holds other files unless you pass \fB\-\-add\fR, which puts kea's files beside yours and replaces none, or \fB\-\-force\fR, which replaces clashing files after a backup of each.
 .SH EVIDENCE
 .PP
 \fBkea ingest\fR reads, never writes, and redacts before it stores. Each source and where kea looks by default:
@@ -322,6 +322,8 @@ kea is made to be used by AI agents as much as by people.
 /plugin install kea@kea
 .fi
 .RE
+.PP
+The plugin starts its MCP server with \fBuvx \-\-python 3.15\fR, so update uv first, as in QUICK START.
 .PP
 \fBMCP server.\fR \fBkea mcp\fR speaks the Model Context Protocol on stdio. Tools: brain_status, state, search, show, decisions, predictions, roadmap, check, plans, seats, effort, log_entry, record_fact, decide, revisit_decision, predict, score_prediction, add_idea, roadmap_add, roadmap_done, plan_new, brief, synth, ingest and council_run. Arguments are checked against each tool's schema. The server uses \fBKEA_BRAIN\fR, then your default brain, and only then a \fBkea.toml\fR above the folder the agent runs in, so a project's own files never take over; initialize names the brain in use. Two limits keep an agent from acting for you: ingest only rescans sources you added in a terminal, and council_run runs only the seats on this machine unless kea.toml sets \fB[council] agents_may_send = true\fR. Resources expose STATE.md, ROADMAP.md, DECISIONS.md, PREDICTIONS.md and AGENTS.md; prompts start_session, end_session and chair_review appear as slash commands in clients that show them.
 .PP

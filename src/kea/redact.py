@@ -106,8 +106,11 @@ SHAPES = (
     re.compile(r"(?<=://)[^/\s:@]{0,64}:(?P<v>[^/\s@]{1,128})(?=@)"),
 )
 
-# Credential words, matched as whole segments of a name: refresh_token and x-api-key match, tokenizer does not.
-_WORDS = {"password", "passwd", "passphrase", "secret", "secrets", "token", "credential", "credentials", "apikey"}
+# Credential words, matched as whole segments of a name: refresh_token and x-api-key match, tokenizer does not. Strong
+# words mean a secret whatever the value looks like; weak ones are common in prose ("the secret: patience"), so their
+# value must also look like a token, with a digit or a symbol in it.
+_STRONG = {"password", "passwd", "passphrase", "apikey"}
+_WEAK = {"secret", "secrets", "token", "credential", "credentials"}
 _PAIRS = {("api", "key"), ("access", "key"), ("private", "key"), ("secret", "key"), ("client", "secret")}
 # A name ending in one of these holds something about a secret, not the secret: secret_name, token_url, api_key_id.
 _ABOUT = {
@@ -115,28 +118,59 @@ _ABOUT = {
     "length", "size", "env", "var", "field", "header", "prefix", "suffix", "format", "expiry", "expires", "ttl",
     "limit", "scope", "scopes", "label", "hint", "endpoint", "host", "version", "kind", "mode", "policy", "rotation",
 }  # fmt: skip
+# Shell variables that hold no secret although their names look like one.
+_SHELL = {"PWD", "OLDPWD"}
 
-# name: value and name=value. A name is judged in code and the scan never consumes a value it keeps, so a pair inside
-# another value (a URL query, a JDBC string) is still found. UPPER is the env style, used for the ledger too.
-NAMED = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Za-z_][\w.\-]{0,63})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;&]{8,512})")
-UPPER = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Z][A-Z0-9_]{0,63})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;&]{8,512})")
-_VALUE_END = frozenset(" \t\r\n\"',;&")
+# name: value and name=value. A name is judged in code, and the scan never consumes a value it keeps, so a pair inside
+# another value (a URL's query, a JDBC string) is still found. In a URL query a value ends at the next &.
+NAMED = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Za-z_][\w.\-]{0,254})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;]{8,512})")
+UPPER = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Z][A-Z0-9_]{0,254})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;]{8,512})")
+_VALUE_END = frozenset("\"',;")
 BEARER = re.compile(r"(?i)\b(?:bearer|token)\s+(?P<v>[A-Za-z0-9_\-.=~+/]{20,})")
 BASIC = re.compile(r"(?i)\bbasic\s+(?P<v>[A-Za-z0-9+/]{8,}={0,2})(?![\w\-])")
-COOKIE = re.compile(r"(?im)^\s*(?:set-)?cookie:\s*(?P<v>\S[^\r\n]{7,})")
-USER_FLAG = re.compile(r"(?<!\S)(?:-u|--user)\s+(?P<user>[^\s:@/]{1,64}):(?P<v>[^\s/]{6,128})")
+COOKIE = re.compile(r"(?im)^[ \t]*(?:set-)?cookie:[ \t]*(?P<v>\S[^\r\n]{7,})")
+USER_FLAG = re.compile(r"(?<!\S)(?:-u|--user)\s+(?P<user>[^\s:@/]{1,64}):(?P<v>\S{1,128})")
 GENERIC = (BEARER, BASIC, COOKIE, USER_FLAG)
 
+# Values that are code, not secrets, when the whole value has one of these shapes.
+_CODE = (
+    re.compile(
+        r"\$\{[^}]*\}|\$\([^)]*\)|\$[A-Z_][A-Z0-9_]*|\{\{.*\}\}|\{[A-Za-z_]\w*\}|<[A-Za-z][A-Za-z_\-. ]*>"
+        r"|%[A-Za-z_]\w*%|%\([A-Za-z_]\w*\)[a-z]"
+    ),
+    re.compile(r"[A-Za-z_][\w.]*\(.*\)"),
+    re.compile(r"[A-Za-z_][\w.]*\[.*"),
+    re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+"),
+    re.compile(r"(?:~|\.{1,2})?/[\w.\-]+(?:/[\w.\-]*)+"),
+)
 
-def _secret_name(name: str) -> bool:
-    parts = [p.lower() for p in re.split(r"[_.\-]+|(?<=[a-z])(?=[A-Z])", name) if p]
-    if not parts or parts[-1] in _ABOUT:
+
+def _words(name: str) -> list[str]:
+    return [p.lower() for p in re.split(r"[_.\-]+|(?<=[a-z])(?=[A-Z])", name) if p]
+
+
+def _secret_name(name: str) -> str | None:
+    """Tell how strongly a name says secret: "strong", "weak", or None."""
+    parts = _words(name)
+    if not parts or parts[-1] in _ABOUT or name in _SHELL:
+        return None
+    if any(p in _STRONG for p in parts) or any(pair in _PAIRS for pair in zip(parts, parts[1:])):
+        return "strong"
+    if name.isupper():
+        # Environment names glue words together: PGPASSWORD, MYSQL_PWD, SLACK_BOTTOKEN.
+        if any(p.endswith(("password", "passwd", "secret", "token")) or p == "pwd" for p in parts) and len(name) > 3:
+            return "strong"
+    if any(p in _WEAK for p in parts):
+        return "weak"
+    return None
+
+
+def _secret_value(value: str, strength: str) -> bool:
+    if any(pattern.fullmatch(value) for pattern in _CODE):
         return False
-    return any(p in _WORDS for p in parts) or any(pair in _PAIRS for pair in zip(parts, parts[1:]))
-
-
-def _secret_value(value: str) -> bool:
-    return "(" not in value and not value.startswith(("/", "./", "~", "$", "%", "{", "<"))
+    if strength == "weak":
+        return any(c.isdigit() for c in value) or any(not c.isalnum() for c in value)
+    return True
 
 
 def _looks_like_token(value: str) -> bool:
@@ -176,16 +210,22 @@ def _pairs(pattern: re.Pattern[str], text: str) -> tuple[str, int]:
     out: list[str] = []
     pos = count = 0
     while (m := pattern.search(text, pos)) is not None:
-        out.append(text[pos : m.start("v")])
-        if _secret_name(m.group("name")) and _secret_value(m.group("v")):
-            end = m.end("v")
-            while end < len(text) and text[end] not in _VALUE_END:
-                end += 1  # a value longer than the pattern's bound is still hidden whole
+        start, end = m.start("v"), m.end("v")
+        if m.start("name") > 0 and text[m.start("name") - 1] in "?&":
+            amp = text.find("&", start, end)
+            end = amp if amp != -1 else end  # a URL query's value ends at the next pair
+        value = text[start:end]
+        strength = _secret_name(m.group("name"))
+        out.append(text[pos:start])
+        if strength and len(value) >= 8 and _secret_value(value, strength):
+            if end - start == 512:
+                while end < len(text) and not text[end].isspace() and text[end] not in _VALUE_END:
+                    end += 1  # a value longer than the pattern's bound is still hidden whole
             out.append(MARKER)
             pos = end
             count += 1
         else:
-            pos = m.start("v")
+            pos = start
     out.append(text[pos:])
     return "".join(out), count
 

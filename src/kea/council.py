@@ -279,12 +279,23 @@ def roster(brain: Brain) -> Roster:
     except tomllib.TOMLDecodeError as exc:
         raise CouncilError(f"council/roster.toml: {exc}") from exc
     seats, errors = [], []
-    for entry in raw.get("seat", []):
+    entries = raw.get("seat", [])
+    if not isinstance(entries, list):
+        errors.append("seats are written [[seat]], one table each; found a single [seat] or a plain value")
+        entries = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            errors.append(f"a seat must be a [[seat]] table, not {entry!r}")
+            continue
         try:
             seats.append(Seat.from_config(entry))
-        except (ProviderError, KeyError, TypeError, ValueError) as exc:
+        except (ProviderError, KeyError, TypeError, ValueError, AttributeError) as exc:
             errors.append(str(exc))
-    gaps = {str(k): float(v) for k, v in (raw.get("rate_limits") or {}).items() if isinstance(v, (int, float))}
+    limits = raw.get("rate_limits") or {}
+    if not isinstance(limits, dict):
+        errors.append("[rate_limits] must be a table of provider = seconds")
+        limits = {}
+    gaps = {str(k): float(v) for k, v in limits.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
     return Roster(seats, gaps, errors)
 
 

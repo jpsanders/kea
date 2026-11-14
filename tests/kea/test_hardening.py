@@ -1,4 +1,4 @@
-"""Regression tests for the findings of the three independent reviews made before the 1.0.0 release."""
+"""Regression tests for the findings of the reviews and verification rounds made before the 1.0.0 release."""
 
 import io
 import json
@@ -1026,3 +1026,155 @@ def test_saying_no_under_json_prints_a_json_error(run: Run, brain: Brain, monkey
     monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
     code, out, err = run("--brain", str(brain.root), "seats", "--probe", "--json")
     assert code == 1 and json.loads(out)["error"].startswith("nothing sent")
+
+
+# ---------------------------------------------------------------- the release gate round
+
+
+def _gpt(text: str) -> str:
+    node = {"message": {"author": {"role": "user"}, "content": {"parts": [text]}}, "parent": None}
+    return json.dumps([{"id": "c1", "title": "t", "current_node": "n1", "mapping": {"n1": node}}])
+
+
+def test_example_and_add_force_are_refused_on_a_folder_of_files(tmp_path: Path) -> None:
+    work = tmp_path / "vault"
+    work.mkdir()
+    (work / "README.md").write_text("# mine\n")
+    with pytest.raises(BrainError, match="example goes in a new folder"):
+        init(work, example=True, add=True, git=False)
+    with pytest.raises(BrainError, match="choose one"):
+        init(work, add=True, force=True, git=False)
+    assert sorted(f.name for f in work.iterdir()) == ["README.md"]
+
+
+def test_repair_leaves_gitignore_alone(brain: Brain) -> None:
+    ignore = brain.file(".gitignore")
+    ignore.write_text("node_modules/\n")
+    assert ".gitignore" not in init(brain.root, git=False)
+    assert ignore.read_text() == "node_modules/\n"
+
+
+def test_gitignore_merge_respects_negations_bytes_and_links(tmp_path: Path) -> None:
+    negated = tmp_path / "negated"
+    negated.mkdir()
+    (negated / ".gitignore").write_text("!digests/\n")
+    init(negated, add=True, git=False)
+    merged = (negated / ".gitignore").read_text()
+    assert ".kea/" in merged and "\ndigests/" not in merged
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / ".gitignore").write_bytes(b"caf\xe9/\n")
+    assert ".gitignore" not in init(raw, add=True, git=False)
+    assert (raw / ".gitignore").read_bytes() == b"caf\xe9/\n" and (raw / "kea.toml").is_file()
+    shared = tmp_path / "shared-ignore"
+    shared.write_text("shared/\n")
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    os.symlink(shared, linked / ".gitignore")
+    init(linked, add=True, git=False)
+    assert shared.read_text() == "shared/\n" and (linked / ".gitignore").is_symlink()
+
+
+def test_kea_folder_is_private_after_a_forced_init(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    (work / ".kea").mkdir(parents=True)
+    (work / ".kea").chmod(0o755)
+    (work / "notes.md").write_text("mine\n")
+    init(work, force=True, git=False)
+    assert (work / ".kea").stat().st_mode & 0o777 == 0o700
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    (fresh / "notes.md").write_text("mine\n")
+    init(fresh, force=True, git=False)
+    assert (fresh / ".kea").stat().st_mode & 0o777 == 0o700
+
+
+def test_a_single_seat_table_is_a_finding_not_a_crash(brain: Brain) -> None:
+    brain.file("council", "roster.toml").write_text(
+        '[seat]\nname = "x"\nprovider = "openai"\nmodel = "m"\nkey_env = "K"\n'
+    )
+    findings = ledger.check(brain)
+    assert any(f.file == "council/roster.toml" and "[[seat]]" in f.message for f in findings)
+    server = mcp.Server(str(brain.root))
+    reply = server.handle(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "check", "arguments": {}}}
+    )
+    assert reply is not None and not reply["result"]["isError"]
+
+
+@pytest.mark.parametrize(
+    ("heading", "confidence", "claim"),
+    [
+        ("### P-0012 · by 2026-12-01 · 62% | Two part dot then pipe", 62, "Two part dot then pipe"),
+        ("### P-0013 | by 2026-12-01 | 63% · Two part pipe then dot", 63, "Two part pipe then dot"),
+    ],
+)
+def test_two_part_mixed_headings_read(brain: Brain, heading: str, confidence: int, claim: str) -> None:
+    path = brain.file("PREDICTIONS.md")
+    path.write_text(path.read_text() + f"\n{heading}\n\n- **Status:** OPEN\n")
+    p = ledger.predictions(brain)[0]
+    assert p["confidence"] == confidence and p["claim"] == claim
+    assert not [f for f in ledger.check(brain) if f.file == "PREDICTIONS.md" and f.level == "error"]
+
+
+def test_a_linked_session_folder_is_skipped(brain: Brain, tmp_path: Path) -> None:
+    outside = tmp_path / "elsewhere" / "proj"
+    outside.mkdir(parents=True)
+    (outside / "x.jsonl").write_text(json.dumps({"type": "user", "message": {"content": "durian outside"}}) + "\n")
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    os.symlink(outside, projects / "q")
+    with Store(brain.index_path) as store:
+        report = ingest.ingest(brain, store, "claude-code", str(projects))
+        assert report.read == 0 and report.skipped == 1 and store.search("durian") == []
+
+
+def test_export_folder_links_are_judged_by_their_target(brain: Brain, tmp_path: Path) -> None:
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "c.json").write_text(_gpt("lychee from elsewhere"))
+    (tmp_path / ".aws" / "sub").mkdir(parents=True)
+    (tmp_path / ".aws" / "sub" / "c.json").write_text(_gpt("lychee from aws"))
+    export = tmp_path / "export"
+    export.mkdir()
+    (export / "conversations-2.json").write_text(_gpt("lychee at home"))
+    os.symlink(tmp_path / "elsewhere" / "c.json", export / "conversations.json")
+    os.symlink(tmp_path / ".aws" / "sub" / "c.json", export / "conversations-1.json")
+    with Store(brain.index_path) as store:
+        ingest.ingest(brain, store, "chatgpt", str(export))
+        bodies = [h["snippet"] for h in store.search("lychee")]
+        assert len(bodies) == 1 and "home" in bodies[0]
+
+
+def test_a_linked_repo_outside_the_folder_is_skipped(brain: Brain, tmp_path: Path) -> None:
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    outside = tmp_path / "elsewhere" / "repo"
+    outside.mkdir(parents=True)
+    env = {**os.environ, "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@example.com"}
+    env |= {"GIT_COMMITTER_NAME": "a", "GIT_COMMITTER_EMAIL": "a@example.com"}
+    for argv in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "kumquat outside"]):
+        subprocess.run(["git", "-C", str(outside), *argv], check=True, env=env)
+    code = tmp_path / "code"
+    code.mkdir()
+    os.symlink(outside, code / "linked")
+    with Store(brain.index_path) as store:
+        report = ingest.ingest(brain, store, "git", str(code))
+        assert report.read == 0 and report.skipped == 1 and store.search("kumquat") == []
+
+
+def test_forced_init_of_a_folder_of_files_names_its_backup(run: Run, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "CLAUDE.md").write_text("Always answer in French.\n")
+    code, out, _ = run("init", str(vault), "--force", "--no-git", "--no-default")
+    assert code == 0 and "the files it replaced are in" in out
+    backup = brain_backup(vault)
+    assert (backup / "CLAUDE.md").read_text() == "Always answer in French.\n"
+    code, out, _ = run("init", str(vault), "--no-git", "--no-default")
+    assert code == 0 and "replaced" not in out and "no file changed" in out
+
+
+def brain_backup(folder: Path) -> Path:
+    found = sorted((folder / ".kea").glob("backup-*"))
+    assert len(found) == 1
+    return found[0]

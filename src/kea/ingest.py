@@ -338,7 +338,7 @@ def _sessions(
             real = path.resolve(strict=True)
         except OSError:
             continue
-        outside = path.is_symlink() and root is not None and not real.is_relative_to(root)
+        outside = root is not None and not real.is_relative_to(root)
         if is_denied(path, deny) or is_denied(real, deny) or outside:
             report.skipped += 1
             continue
@@ -456,13 +456,25 @@ def _export_files(path: Path, pattern: str) -> Iterator[tuple[str, IO[bytes]]]:
                     with archive.open(info) as fh:
                         yield info.filename, fh
     elif path.is_dir():
+        base = path.resolve()
         for member in sorted(path.rglob("*.json")):
-            if rx.search(member.name):
-                with member.open("rb") as fh:
-                    yield str(member.relative_to(path)), fh
+            if not rx.search(member.name) or not _stays_inside(member, base):
+                continue
+            with member.open("rb") as fh:
+                yield str(member.relative_to(path)), fh
     elif path.is_file() and rx.search(path.name):
         with path.open("rb") as fh:
             yield path.name, fh
+
+
+def _stays_inside(member: Path, base: Path, deny: list[str] | None = None) -> bool:
+    """Tell whether a file found under a folder may be read: it resolves inside the folder and is not denied."""
+    try:
+        real = member.resolve(strict=True)
+    except OSError:
+        return False
+    extra = deny or []
+    return real.is_relative_to(base) and not is_denied(member, extra) and not is_denied(real, extra)
 
 
 def _load(fh: IO[bytes]) -> Any:
@@ -727,7 +739,7 @@ def _git(brain: Brain, store: Store, report: Report, path: Path, deny: list[str]
     emails, names = _identity(brain)
     seen = set()
     for repo in find_repos(path):
-        if is_denied(repo.resolve(), deny):
+        if not _stays_inside(repo, path.resolve(), deny):
             report.skipped += 1
             continue
         if store.is_forgotten("git", str(repo)):

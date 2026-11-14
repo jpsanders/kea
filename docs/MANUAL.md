@@ -34,7 +34,7 @@ your machine except a council packet you choose to send.
 ## QUICK START
 
 ```sh
-uv self update                                          # an older uv knows only 3.15 previews
+uv self update                                          # or brew upgrade uv, or pip install -U uv
 uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 if missing
 kea init ~/brain                                        # make a brain; it becomes your default
 cd ~/brain && kea status                                # the whole brain at a glance
@@ -161,7 +161,8 @@ kea looks, in order: `--brain PATH`, then `$KEA_BRAIN`, then the current folder 
 brain named in `~/.config/kea/config.toml`. The MCP server tries the default before the folders, so a `kea.toml` in a
 project an agent works in never takes over. The first real `kea init` sets the default (`--example` never does;
 `--default` changes it). A folder without `kea.toml` is never treated as a brain, so notes kea did not make are never
-touched, and `kea init` refuses a folder that already holds other files unless you pass `--force`.
+touched, and `kea init` refuses a folder that already holds other files unless you pass `--add`, which puts kea's
+files beside yours and replaces none, or `--force`, which replaces clashing files after a backup of each.
 
 ## EVIDENCE
 
@@ -245,6 +246,8 @@ rules and the session routine, kea-council runs a council review, kea-frameworks
 /plugin marketplace add jpsanders/kea
 /plugin install kea@kea
 ```
+
+The plugin starts its MCP server with `uvx --python 3.15`, so update uv first, as in QUICK START.
 
 **MCP server.** `kea mcp` speaks the Model Context Protocol on stdio. Tools: brain_status, state, search, show,
 decisions, predictions, roadmap, check, plans, seats, effort, log_entry, record_fact, decide, revisit_decision,

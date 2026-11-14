@@ -274,6 +274,22 @@ def parse_date(text: str, base: date | None = None) -> date | None:
     return None
 
 
+def _merge_gitignore(target: Path, text: str, written: list[str]) -> None:
+    """Add kea's ignore lines to a .gitignore people wrote, skipping lines they negate; never through a link."""
+    if target.is_symlink():
+        return
+    try:
+        current = target.read_text(encoding="utf-8")
+    except OSError, UnicodeDecodeError:
+        return  # not text kea can read safely: leave it exactly as it is
+    have = {line.strip().lstrip("!") for line in current.splitlines()}
+    missing = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
+    missing = [line for line in missing if line.strip() not in have]
+    if missing:
+        target.write_text(current.rstrip("\n") + "\n\n# kea\n" + "\n".join(missing) + "\n", encoding="utf-8")
+        written.append(".gitignore")
+
+
 def last_backup(folder: Path) -> Path | None:
     """
     Find the newest backup ``kea init --force`` made in a brain.
@@ -340,8 +356,10 @@ def init(
         raise BrainError(f"make the brain in a folder of its own, such as {Path.home() / 'brain'}, not in {folder}")
     fresh = not folder.exists() or not any(folder.iterdir())
     existing = (folder / MARKER).is_file()
-    if example and existing:
-        raise BrainError(f"{folder} is already a brain; the example goes in a new folder: kea init /tmp/demo --example")
+    if example and not fresh:
+        raise BrainError(f"{folder} is not empty; the example goes in a new folder: kea init /tmp/demo --example")
+    if add and force and not existing:
+        raise BrainError("choose one: --add keeps every file already there, --force replaces kea's files")
     if not fresh and not existing and not (force or add):
         raise BrainError(
             f"{folder} holds other files and is not a brain: make the brain in a new folder, such as "
@@ -362,7 +380,9 @@ def init(
             parts = rel.split("/")
             parts[-1] = DOTFILES.get(parts[-1], parts[-1])
             planned["/".join(parts)] = item
-    written = []
+    written: list[str] = []
+    (folder / INDEX_DIR).mkdir(mode=0o700, parents=True, exist_ok=True)
+    (folder / INDEX_DIR).chmod(0o700)
     stamp = folder / INDEX_DIR / f"backup-{now():%Y%m%d-%H%M%S-%f}"
     backup, n = stamp, 1
     while backup.exists():
@@ -370,14 +390,9 @@ def init(
     for rel, item in planned.items():
         target = folder / rel
         text = _render(item.read_text(encoding="utf-8"), values, base)
-        if rel == ".gitignore" and target.is_file():
-            current = target.read_text(encoding="utf-8")
-            have = {line.strip() for line in current.splitlines()}
-            missing = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
-            missing = [line for line in missing if line.strip() not in have]
-            if missing:
-                target.write_text(current.rstrip("\n") + "\n\n# kea\n" + "\n".join(missing) + "\n", encoding="utf-8")
-                written.append(rel)
+        if rel == ".gitignore" and (target.exists() or target.is_symlink()):
+            if not existing and (add or force):
+                _merge_gitignore(target, text, written)
             continue
         if target.exists():
             if not force:

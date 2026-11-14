@@ -30,7 +30,8 @@ Plain Markdown in a folder you own. One Python package with no dependencies. A C
 and a Claude Code plugin.
 
 ```sh
-uv self update && uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # fetches Python 3.15
+uv self update      # or brew upgrade uv, or pip install -U uv: an older uv knows only the 3.15 previews
+uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # fetches Python 3.15
 kea init ~/tidewater --example && cd ~/tidewater && kea status
 ```
 
@@ -149,6 +150,8 @@ kea skill install        # into ~/.claude/skills (Claude Code, OpenCode) and ~/.
 /plugin install kea@kea
 ```
 
+The plugin starts its MCP server with `uvx --python 3.15`, so update uv first, as in [Install](#install).
+
 **MCP server** with 25 tools (search, show, brain_status, log_entry, record_fact, decide, predict, score_prediction,
 roadmap_add, council_run and more), five resources and three prompts:
 
@@ -194,8 +197,9 @@ pip install https://github.com/jpsanders/kea/releases/download/1.0.0/kea_brain-1
 docker build -t kea . && docker run --rm -it --user "$(id -u):$(id -g)" -v ~/brain:/brain kea status
 ```
 
-kea needs Python 3.15; with `--python 3.15`, uv downloads it for you (run `uv self update` first: an older uv knows
-only the 3.15 previews). The distribution is called `kea-brain` and the command is `kea`.
+kea needs Python 3.15; with `--python 3.15`, uv downloads it for you. Update uv first, since an older uv knows only
+the 3.15 previews: `uv self update`, or `brew upgrade uv` or `pip install -U uv` when that is how uv came. The
+distribution is called `kea-brain` and the command is `kea`.
 Then `kea man --install` makes `man kea` work.
 
 ## Commands

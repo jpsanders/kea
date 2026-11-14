@@ -184,8 +184,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     """
     folder = Path(args.path or ".").expanduser().resolve()
     existed = (folder / brain_mod.MARKER).is_file()
+    had_ignore = (folder / ".gitignore").exists() or (folder / ".gitignore").is_symlink()
+    before = brain_mod.last_backup(folder)
     written = brain_mod.init(folder, args.name, args.owner, args.example, args.force, not args.no_git, args.add)
-    backup = brain_mod.last_backup(folder) if args.force and existed else None
+    after = brain_mod.last_backup(folder)
+    backup = after if after != before else None
+    merged = had_ignore and ".gitignore" in written
     default = None
     current = brain_mod.default_brain()
     if args.default or (not args.no_default and not args.example and current is None):
@@ -208,9 +212,12 @@ def cmd_init(args: argparse.Namespace) -> int:
             if default:
                 print(f"  it is now your default brain {p.dim('(' + _home(default) + ')')}")
             return
-        print(f"{p.accent('kea')} made a brain in {p.bold(_home(str(folder)))} ({_plural(len(written), 'file')})")
+        done = "rewrote the brain's files in" if existed else "made a brain in"
+        print(f"{p.accent('kea')} {done} {p.bold(_home(str(folder)))} ({_plural(len(written), 'file')})")
         if args.add:
-            print("  every file that was already there is kept; kea's lines were added to an existing .gitignore")
+            print("  every file that was already there is kept")
+        if merged:
+            print("  kea's lines were added to your .gitignore")
         if backup:
             print(f"  the files it replaced are in {_home(str(backup))}")
         if default:
@@ -1060,7 +1067,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="the brain's name")
     p.add_argument("--owner", help="whose brain it is: the person 'waiting for' means")
     p.add_argument("--example", action="store_true", help="fill it with a made up example brain to explore")
-    p.add_argument("--force", action="store_true", help="overwrite kea's files, backing each one up first")
+    p.add_argument("--force", action="store_true", help="replace every file kea writes, backing each one up first")
     p.add_argument(
         "--add", action="store_true", help="add kea's files to a folder that holds other files, replacing none"
     )
