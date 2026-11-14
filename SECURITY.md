@@ -30,5 +30,7 @@ You will get an answer within a week.
 
 ## What to keep out of a brain
 
-Keys, tokens and passwords. Free model tiers may keep or train on what they receive: send personal data only to local
-seats (Ollama, LM Studio) or providers whose terms you have read.
+Keys, tokens and passwords. Redaction is a safety net, not a vault: it judges a value of eight characters or more, so
+a shorter password after `password=` stays as written, and it keeps a value that reads exactly like code, such as
+`user.secret` or `$password`, so your notes about code stay searchable. Free model tiers may keep or train on what
+they receive: send personal data only to local seats (Ollama, LM Studio) or providers whose terms you have read.
