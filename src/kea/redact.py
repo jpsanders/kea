@@ -17,6 +17,7 @@ found inside other values too, such as a URL's query. Every pattern runs in line
 import base64
 import binascii
 import fnmatch
+import functools
 import re
 from collections.abc import Iterable
 from pathlib import PurePath
@@ -138,8 +139,9 @@ _STRING_PREFIXES = {"r", "b", "f", "u", "rb", "br", "fr", "rf"}
 # name: value and name=value. A name is judged in code, and the scan never consumes a value it keeps, so a pair inside
 # another value (a URL's query, a JDBC string) is still found. In a URL query a value ends at the next &. A name starts
 # only where no other name character stands before it, so a long run of name characters is scanned once.
-NAMED = re.compile(r"(?<![\w.\-])(?P<name>-{0,2}[A-Za-z_][\w.\-]{0,254})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;]{8,512})")
-UPPER = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Z][A-Z0-9_]{0,254})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;]{8,512})")
+_GAP = r"[\"']?[ \t]*[:=][ \t]*(?:\r?\n[ \t]*)?[\"']?"  # a value on the same line or the next, never past a blank line
+NAMED = re.compile(rf"(?<![\w.\-])(?P<name>-{{0,2}}[A-Za-z_][\w.\-]{{0,254}}){_GAP}(?P<v>[^\s\"',;]{{8,512}})")
+UPPER = re.compile(rf"(?<![A-Za-z0-9_.])(?P<name>[A-Z][A-Z0-9_]{{0,254}}){_GAP}(?P<v>[^\s\"',;]{{8,512}})")
 _VALUE_END = frozenset("\"',;")
 BEARER = re.compile(r"(?i)\b(?:bearer|token)\s+(?P<v>[A-Za-z0-9_\-.=~+/]{20,})")
 BASIC = re.compile(r"(?i)\bbasic\s+(?P<v>[A-Za-z0-9+/]{8,}={0,2})(?![\w\-])")
@@ -154,9 +156,9 @@ GENERIC = (BEARER, BASIC, COOKIE, USER_FLAG)
 _SEG = r"[A-Za-z_]\w*"
 _SEP = r"(?:\.|::|->)"
 _SUB = r"(?:\[[\w.:]*\])?"
-_GROUP = rf"(?:\((?:\*{{0,2}}[\w.]+{_SUB}(?:=[\w.]+{_SUB})?)?\)|\[[\w.:]*\])"
+_GROUP = rf"(?:\((?:\*{{0,2}}[\w.]+(?:\([\w.]*\))?{_SUB}(?:=[\w.]+{_SUB})?)?\)|\[[\w.:]*\])"
 _REF = re.compile(
-    r"\$[A-Z_]+|\$[a-z_]+|\$\{\{.*|\$\{[A-Za-z_]\w*(?:\}|(?::?[-=?+]|[#%/^,]{1,2})[\w.\-/:@]*\}?)"
+    r"\$[A-Z_]+|\$\{\{.*|\$\{[A-Za-z_]\w*(?:\}|(?::?[-=?+]|[#%/^,]{1,2})[\w.\-/:@]*\}?)"
     r"|\$\([a-z_./][a-z0-9_.\-/]*\)?|\{\{.*\}\}|<[A-Za-z][A-Za-z_\-. ]*>|%[A-Za-z_]+%"
     r"|%\([A-Za-z_]\w*\)[a-z]|\{[A-Za-z_][A-Za-z_.]*(?:\([\w.]*\))?(?:![rsa])?(?::[\w.<>^=+\-#,%]*)?\}[)\]]?"
 )
@@ -165,22 +167,48 @@ _CLOSED = re.compile(rf"(?P<root>{_SEG})(?P<more>(?:{_SEP}{_SEG})*(?:{_GROUP}(?:
 _ROOTS = (
     "self|cls|this|os|sys|env|environ|settings|config|conf|cfg|request|req|ctx|context|app|process|args|opts|options"
     "|params|vault|secrets|data|props|state|import|window|globalThis|module|exports|session|creds|credentials|auth"
-    "|response|resp|res|user"
+    "|response|resp|res|user|var|local"
 )
-_CHAIN = re.compile(
-    rf"(?:{_ROOTS})(?:{_SEP}{_SEG})+|[A-Za-z_]+(?:{_SEP}[A-Za-z_]+)*{_SEP}[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+"
-)
+_ROOT_NAMES = frozenset(_ROOTS.split("|"))
+_CHAIN = re.compile(rf"(?P<root>{_SEG})(?P<rest>(?:{_SEP}{_SEG})+)")
+_CONSTANT = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
+_CODEY = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+|[a-z]{2,}(?:[A-Z][a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
+_ROOT_LIKE = re.compile(r"_*[a-z][a-z0-9_]*|[A-Z][a-z]+(?:[A-Z][a-z]+)*")
 _TOP = (
     "home|root|run|etc|var|usr|opt|tmp|srv|mnt|media|proc|dev|sys|app|data|workspace|workspaces|Users|Volumes|private"
 )
 _PATH = re.compile(rf"(?:~|\.{{1,2}}|/(?:{_TOP}))/[\w.\-]+(?:/[\w.\-]*)*")
 _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S*")
 _RUNS = re.compile(r"[A-Za-z0-9]+")
+_LONG_RUNS = re.compile(r"[A-Za-z0-9]{8,}")
+_DIGIT = re.compile(r"\d")
+_LOWER_CHAR = re.compile(r"[a-z]")
+_UPPER_CHARS = re.compile(r"[A-Z]")
 _LOWER = "abcdefghijklmnopqrstuvwxyz"
 # How people name things in code: snake_case, camelCase and PascalCase words, or an UPPER_CASE constant.
 _NAMED_LIKE = re.compile(r"(?:[A-Z]{2,}(?=[A-Z][a-z]{2}))?[A-Za-z_][a-z0-9_]*(?:[A-Z][a-z0-9_]+)*|[A-Z][A-Z0-9_]*")
 _SCHEMES = {"http", "https", "ssh", "git", "ftp", "sftp", "file"}
-_CONTAINER = re.compile(r"\b(?:docker|podman|nerdctl|kubectl|ctr|buildah|singularity|apptainer)\b")
+_CONTAINERS = {"docker", "podman", "nerdctl", "kubectl", "ctr", "buildah", "singularity", "apptainer"}
+_TOOL = re.compile(r"\b(curl|wget|http|https|git|" + "|".join(sorted(_CONTAINERS)) + r")\b")
+_COMMAND_END = re.compile(r"&&|\|\||[;|\n]|\s--\s")
+_VARIABLE = re.compile(r"\$\{?[A-Za-z_]\w*\}?")
+_VAR_WORDS = {"password", "passwd", "pass", "pw", "pwd", "token", "secret", "secrets", "key", "apikey", "auth"}
+_VAR_WORDS |= {"credential", "credentials"}
+_ATTRIBUTES = {
+    "environ",
+    "env",
+    "form",
+    "args",
+    "json",
+    "value",
+    "values",
+    "text",
+    "headers",
+    "cookies",
+    "params",
+    "query",
+}
+_ATTRIBUTES |= {"body", "get"}
 
 
 def _words(name: str) -> list[str]:
@@ -214,11 +242,17 @@ def _secret_name(name: str) -> str | None:
     return "weak" if any(p in _WEAK for p in own) else None
 
 
+def _tokenish_value(value: str) -> bool:
+    """Tell whether any run of eight or more letters and digits in a value looks generated."""
+    return any(_tokenish(run) for run in _LONG_RUNS.findall(value))
+
+
+@functools.lru_cache(maxsize=8192)
 def _tokenish(run: str) -> bool:
     """Tell whether a run of letters and digits looks generated rather than named by a person."""
-    digit = any(c.isdigit() for c in run)
-    lower = any(c.islower() for c in run)
-    upper = sum(c.isupper() for c in run)
+    digit = _DIGIT.search(run) is not None
+    lower = _LOWER_CHAR.search(run) is not None
+    upper = len(_UPPER_CHARS.findall(run))
     if (len(run) >= 8 and digit and lower and upper) or (len(run) >= 16 and digit and (lower or upper > 0)):
         return True
     if len(run) >= 12 and lower and upper >= 3:
@@ -263,11 +297,41 @@ def _callable(value: str, rest: str) -> bool:
     return following in (",", " ", "'", '"') and (")" in line or "]" in line or line.endswith((",", "(")))
 
 
+def _codey(segment: str) -> bool:
+    """Tell whether a name was written for code: snake_case, camelCase or an UPPER_CASE constant."""
+    return _CODEY.fullmatch(segment.strip("_")) is not None
+
+
+def _attribute_chain(value: str) -> bool:
+    """
+    Tell whether a dotted value is an attribute access rather than a dotted passphrase.
+
+    self.password and os.environ start at a well known object; settings.API_KEY, tokenizer.eos_token and
+    var.db_password end at a name made for code. this.is.my.password and Summer.Holiday2026 are neither.
+    """
+    m = _CHAIN.fullmatch(value)
+    if m is None:
+        return False
+    segments = re.split(_SEP, m["rest"])[1:]
+    if m["root"] in _ROOT_NAMES:
+        if len(segments) == 1:
+            # self.password, config.token and os.environ, not data.state or auth.tiger
+            only = segments[0]
+            return _codey(only) or only in _ATTRIBUTES or any(w in _VAR_WORDS for w in _words(only))
+        if any(_codey(s) for s in segments):
+            return True
+    if _ROOT_LIKE.fullmatch(m["root"]) is None:
+        return False
+    return _codey(segments[-1]) and all(_NAMED_LIKE.fullmatch(s) for s in segments)
+
+
 def _is_code(value: str, rest: str) -> bool:
     """Tell whether a value is code, such as a variable, a call or a path, rather than a secret."""
-    if any(_tokenish(run) for run in _RUNS.findall(value)):
+    if _tokenish_value(value):
         return False
-    if _REF.fullmatch(value) or _CHAIN.fullmatch(value) or _PATH.fullmatch(value) or _URL.fullmatch(value):
+    if re.fullmatch(r"\$[a-z_]+", value):
+        return any(w in _VAR_WORDS for w in _words(value[1:]))  # $password and $api_key, not $moneybags
+    if _REF.fullmatch(value) or _PATH.fullmatch(value) or _URL.fullmatch(value) or _attribute_chain(value):
         return True
     return _callable(value, rest)
 
@@ -300,17 +364,27 @@ def _basic_credentials(value: str) -> bool:
 
 
 def _user_flag_kept(match: re.Match[str]) -> bool:
-    """Tell whether ``-u a:b`` is not a user and password: a uid, a URL, a git revision, a variable or a group."""
+    """
+    Tell whether ``-u a:b`` is not a user and password: a uid and gid, a URL, a variable, a git revision or a group.
+
+    The command the flag belongs to decides, read from the last ``&&``, ``||``, ``;``, ``|`` or `` -- `` before it
+    and at most 200 characters back: ``docker exec box curl -u`` and ``git pull && curl -u`` are curl.
+    """
     user, value = match.group("user"), match.group("v")
-    if value.isdigit() or value == user or value.startswith(("//", "$")) or user.startswith("$"):
-        return True
-    if "+" in user or user.lower() in _SCHEMES or "~" in user or "^" in user or user == "HEAD":
-        return True
-    text = match.string
-    line = text[text.rfind("\n", 0, match.start()) + 1 : match.start()]
-    if re.search(r"\bgit\b", line) and not any(_tokenish(run) for run in _RUNS.findall(value)):
-        return True
-    return bool(_CONTAINER.search(line)) and re.fullmatch(r"[A-Za-z_][\w\-]{0,31}", value) is not None
+    if value.isdigit() or value == user or value.startswith("//") or _VARIABLE.fullmatch(value):
+        return True  # docker -u 1000:1000, pip install --user git+https://..., curl -u admin:$PASSWORD
+    if "+" in user or user.lower() in _SCHEMES:
+        return True  # a URL: pip install --user https://..., az login -u http://app
+    window = match.string[max(0, match.start() - 200) : match.start()]
+    tools = _TOOL.findall(_COMMAND_END.split(window)[-1])
+    tool = tools[-1] if tools else ""
+    if tool == "git":
+        revision = "~" in user or "^" in user or user == "HEAD"
+        path = re.fullmatch(r"[\w.\-]+(?:/[\w.\-]+)*\.\w+|[\w.\-]+(?:/[\w.\-]+)+", value) is not None
+        return revision or (path and not _tokenish_value(value))  # git diff -u HEAD~1:src/app.py
+    if tool in _CONTAINERS:
+        return re.fullmatch(r"[a-z_][a-z_\-]{0,31}", value) is not None  # docker run -u postgres:root
+    return False
 
 
 def _keep(match: re.Match[str]) -> bool:

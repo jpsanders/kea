@@ -1074,7 +1074,7 @@ def test_gitignore_merge_respects_negations_bytes_and_links(tmp_path: Path) -> N
     notes: list[str] = []
     assert ".gitignore" not in init(wide, add=True, git=False, notes=notes)
     assert (wide / ".gitignore").read_bytes() == "build/\n".encode("utf-16")
-    assert notes and ".kea/" in notes[0] and "yourself" in notes[0]
+    assert notes and ".kea/" in notes[0] and "regular UTF-8 file" in notes[0]
     shared = tmp_path / "shared-ignore"
     shared.write_text("shared/\n")
     linked = tmp_path / "linked"
@@ -1083,7 +1083,7 @@ def test_gitignore_merge_respects_negations_bytes_and_links(tmp_path: Path) -> N
     notes = []
     init(linked, add=True, git=False, notes=notes)
     assert shared.read_text() == "shared/\n" and (linked / ".gitignore").is_symlink()
-    assert notes and "it is a link" in notes[0]
+    assert notes and "linked" in notes[0]
 
 
 def test_kea_folder_is_private_after_a_forced_init(tmp_path: Path) -> None:
@@ -1256,3 +1256,48 @@ def test_a_broken_roster_never_crashes_check_or_status(run: Run, brain: Brain, r
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "check", "arguments": {}}}
     )
     assert reply is not None and not reply["result"]["isError"]
+
+
+# ---------------------------------------------------------------- the sixth round
+
+
+def test_git_keeps_the_index_out_when_the_gitignore_cannot(tmp_path: Path) -> None:
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    shared = tmp_path / "shared-ignore"
+    shared.write_text(".kea/\ncouncil/briefing/\ndigests/\n")
+    for name in ("wide", "linked"):
+        folder = tmp_path / name
+        folder.mkdir()
+        subprocess.run(["git", "init", "-q", str(folder)], check=True)
+        if name == "wide":
+            (folder / ".gitignore").write_bytes("build/\n".encode("utf-16"))
+        else:
+            os.symlink(shared, folder / ".gitignore")
+        notes: list[str] = []
+        init(folder, add=True, git=False, notes=notes)
+        assert notes and ".git/info/exclude" in notes[0]
+        (folder / ".kea" / "index.sqlite").write_text("x")
+        (folder / "digests").mkdir(exist_ok=True)
+        (folder / "digests" / "d.md").write_text("x")
+        status = subprocess.run(
+            ["git", "-C", str(folder), "status", "--porcelain", "--untracked-files=all"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert ".kea/" not in status and "digests/" not in status
+
+
+def test_init_names_the_files_it_left_out_of_a_linked_folder(run: Run, tmp_path: Path) -> None:
+    outside = tmp_path / "shared-council"
+    outside.mkdir()
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "notes.md").write_text("mine\n")
+    os.symlink(outside, vault / "council")
+    code, out, _ = run("init", str(vault), "--add", "--no-git", "--no-default")
+    assert code == 0 and "council/ is a link" in out and "council/roster.toml" in out
+    assert list(outside.iterdir()) == []
+    code, out, _ = run("init", str(vault), "--no-git", "--no-default")
+    assert "put back nothing" in out and "council/roster.toml" in out

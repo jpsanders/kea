@@ -163,9 +163,11 @@ project an agent works in never takes over. The first real `kea init` sets the d
 `--default` changes it). A folder without `kea.toml` is never treated as a brain, so notes kea did not make are never
 touched, and `kea init` refuses a folder that already holds other files unless you pass `--add`, which puts kea's
 files beside yours and replaces none, or `--force`, which replaces clashing files after a backup of each (never both).
-kea adds its lines to a `.gitignore` you already have, keeping its encoding and line endings; when it cannot (a link,
-or UTF-16), it says which lines to add yourself. It never writes through a link or into a linked folder: `--force`
-keeps a linked file's link in the backup and puts a regular file in its place.
+kea adds its lines to a `.gitignore` you already have, keeping its encoding and line endings. git reads neither a
+linked nor a UTF-16 `.gitignore`, so for those kea puts its lines in `.git/info/exclude` (git reads it on this machine
+only), or says what to do when there is no repository yet. `kea init` never writes through a link or into a linked
+folder, and names the files it left out; `--force` keeps a linked file's link in the backup and puts a regular file in
+its place.
 
 ## EVIDENCE
 

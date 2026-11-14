@@ -210,7 +210,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     def human(p: Paint) -> None:
         if existed and not args.force:
             restored = f"put back {_plural(len(written), 'missing file')}" if written else "found nothing missing"
+            if notes and not written:
+                restored = "put back nothing"
             print(f"{p.accent('kea')} {_home(str(folder))} is already a brain: {restored}; no file changed")
+            for note in notes:
+                print(f"  {p.warn(note)}")
             if default:
                 print(f"  it is now your default brain {p.dim('(' + _home(default) + ')')}")
             return

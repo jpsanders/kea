@@ -82,6 +82,20 @@ SECRETS = [
     ("password=Hunter(prod)", "Hunter(prod)"),
     ("client_secret: /Zx8kq2LmN0/pQ7wERt", "Zx8kq2LmN0"),
     ("git log; curl -u admin:Hunter2Secret99 https://x", "Hunter2Secret99"),
+    # -u judged by the command it belongs to, and $ values only when they are whole variables.
+    ("Checked the cluster: docker exec -it es01 curl -u elastic:Hunter2Secret99 https://x", "Hunter2Secret99"),
+    ("cd app && git pull && curl -u admin:password123 https://jenkins.local/job/x/build", "password123"),
+    ("kubectl exec -it p -- curl -u admin:RabbitPass2026 http://x", "RabbitPass2026"),
+    ("after the git merge I ran curl -u admin:hunter2pass", "hunter2pass"),
+    ("podman run box -u deploy:CorrectHorse_Battery9", "CorrectHorse_Battery9"),
+    ("curl -u admin:$uperS3cret!2026 https://x", "uperS3cret!2026"),
+    ("curl -u $USER:Hunter2Secret99 https://x", "Hunter2Secret99"),
+    # Dotted passphrases and $words that only look like code.
+    ("password=this.is.my.password", "this.is.my.password"),
+    ("DB_PASSWORD=this.is.secret", "this.is.secret"),
+    ("password=data.staple", "data.staple"),
+    ("DB_PASSWORD=$ecretsauce", "$ecretsauce"),
+    ("password=$moneybags", "$moneybags"),
 ]
 # Text that must stay exactly as it is, at both strengths.
 KEEP = [
@@ -161,6 +175,18 @@ KEEP = [
     "docker run -u root:wheel app",
     "docker run -u $UID:$GID app",
     "podman run -u postgres:root db",
+    "curl -u admin:$PASSWORD https://x",
+    # Nested calls, Terraform and attribute chains that end at a name made for code.
+    "SECRET_KEY = hashlib.sha256(os.urandom(32)).hexdigest()",
+    "password = hashlib.sha256(password.encode()).hexdigest()",
+    "secret = base64.b64encode(os.urandom(32)).decode()",
+    "password = var.db_password",
+    "password = local.db_password",
+    "tokenizer.pad_token = tokenizer.eos_token",
+    "password = $password",
+    # A pair never crosses a blank line.
+    "Password:\n\nEverything is fine here",
+    "set OPENAI_API_KEY =\n\nGenerated a fresh one",
 ]
 
 
@@ -172,6 +198,12 @@ def test_every_secret_in_the_corpus_is_hidden(text: str, secret: str) -> None:
 @pytest.mark.parametrize("text", KEEP)
 def test_ordinary_text_code_and_commands_are_kept(text: str) -> None:
     assert redact(text) == text and redact(text, generic=False) == text
+
+
+def test_the_ledger_hides_dotted_passphrases_and_keeps_nested_calls() -> None:
+    assert "this.is.secret" not in redact("DB_PASSWORD=this.is.secret", generic=False)
+    kept = "SECRET_KEY = hashlib.sha256(os.urandom(32)).hexdigest()"
+    assert redact(kept, generic=False) == kept
 
 
 def test_the_ledger_strength_still_hides_unmistakable_shapes() -> None:
@@ -191,6 +223,10 @@ def test_the_ledger_strength_still_hides_unmistakable_shapes() -> None:
         "a-" * 100000,
         "--a" * 70000,
         "token=a(" * 25000,
+        "curl -u a:b " * 20000,
+        "docker -u a:" * 20000,
+        "PASSWORD=http://x?" * 13000,
+        "PASSWORD=${{" * 20000,
         ("x" * 300 + "=" + "y" * 20 + " ") * 600,
     ],
 )
