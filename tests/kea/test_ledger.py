@@ -170,7 +170,7 @@ def test_status_of_the_example(example: Brain) -> None:
     assert s["decisions"]["due"] == ["D-0002"]
     assert s["predictions"]["due"] == ["P-0007"]
     assert s["predictions"]["scored"] == 6
-    assert s["state"]["unverified"] == 2 and s["state"]["stale_facts"] == 1
+    assert s["state"]["unverified"] == 1 and s["state"]["stale_facts"] == 1
     assert s["metrics_not_measured"] == 2
     assert s["plans"][0]["slug"] == "second-cafe" and s["plans"][0]["reviews"] == 3
     assert s["attention"] == 3

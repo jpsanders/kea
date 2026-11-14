@@ -11,6 +11,11 @@ facts_stale_after_days = 90    # each fact needs rechecking at least this often
 # What every council packet carries before the plan, in this order. Facts first.
 include = ["STATE.md", "METRICS.md", "DECISIONS.md"]
 
+[council]
+# Agents on the MCP server may run only the seats on this machine. Set true to let them send a plan's packet to
+# outside seats as well; they still have to ask you first.
+agents_may_send = false
+
 [identity]
 # Your git author emails and names, so search can tell your commits from other people's.
 # Left empty, kea reads them from your global git config.

@@ -34,10 +34,10 @@ your machine except a council packet you choose to send.
 ## QUICK START
 
 ```sh
-uv tool install git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 when you lack it
+uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 if missing
 kea init ~/brain                                        # make a brain; it becomes your default
 cd ~/brain && kea status                                # the whole brain at a glance
-kea skill install                                       # teach Claude Code, Codex and OpenCode to use it
+kea skill install                                       # teach Claude Code, Codex and OpenCode
 kea ingest claude-code                                  # make your past agent sessions searchable
 kea search "what did we decide about pricing"
 ```
@@ -90,14 +90,14 @@ These rules are the point of the system. The CLI, the skills and the MCP server 
 ## COMMANDS
 
 Every command that prints data takes `--json` and prints one JSON document with stable fields. `--brain PATH` before
-the command picks the brain. Dates accept `2026-12-01`, `today`, `tomorrow`, or an offset such as `+30d`, `+6w` or
-`+3m`.
+the command picks the brain. Dates accept `2026-12-01`, `today`, `tomorrow`, or an offset such as `+30d`, `+6w`, `+3m`
+or, for `--since`, `-30d`.
 
 ### Start and look
 
 | Command | What it does |
 | --- | --- |
-| kea init [PATH] | Make a brain; --name, --owner, --example, --force, --no-git, --default, --no-default |
+| kea init [PATH] | Make a brain, or put back a brain's missing files; --example, --force (backs up first), --default |
 | kea status | The whole brain: freshness, due decisions and predictions, roadmap, plans, seats, evidence, health |
 | kea check | Lint: unsourced facts, facts past recheck, malformed entries, overdue items. Exit 1 on errors; --strict |
 | kea state | The facts and the newest log entries; --entries N |
@@ -129,9 +129,9 @@ the command picks the brain. Dates accept `2026-12-01`, `today`, `tomorrow`, or 
 | kea search QUERY | Best matches first; --kind, --platform, --mine, --since DATE, --limit N, --any |
 | kea show ID | One hit in full with its source; --context N shows the turns around it |
 | kea sources | What the index was read from, with errors |
-| kea forget ID | Delete a source and everything read from it; --kind KIND for every source of one kind |
+| kea forget ID | Delete a source and what was read from it; later scans skip it; --kind KIND for a whole kind |
 | kea effort | Your own prompts to AI agents per project: where attention went; --months, --since |
-| kea digest [TRANSCRIPT] | A Claude Code session as digest.md, prompts.md, turns.md and meta.json; -o DIR, --tz |
+| kea digest [TRANSCRIPT] | A Claude Code session as private readable files in the brain's digests/; -o DIR, --tz |
 
 ### Plans and the council
 
@@ -142,14 +142,14 @@ the command picks the brain. Dates accept `2026-12-01`, `today`, `tomorrow`, or 
 | kea brief SLUG | Build the packet every seat reads, hashed; --show prints it |
 | kea council SLUG | Send the packet to every ready seat in parallel; --seat, --resume, --dry-run, --yes |
 | kea synth SLUG | The synthesis scaffold: verdicts, convergence, splits, solo insights |
-| kea seats | The seats and whether each can run; --probe asks each to answer |
+| kea seats | The seats, their hosts, whether each can run; --probe asks each to answer (--yes for custom hosts) |
 
 ### Agents and docs
 
 | Command | What it does |
 | --- | --- |
 | kea mcp | Serve the brain to agents over the Model Context Protocol on stdio |
-| kea skill install | Copy kea's skills into every agent found; --agent claude, codex, opencode or agents; --dry-run |
+| kea skill install | Copy kea's skills where agents read them; --agent claude, agents, codex or opencode; --dry-run |
 | kea skill show [NAME] | Print a skill, for agents without a skills folder |
 | kea guide | Print this manual as Markdown |
 | kea man | Show the man page; --install so plain man kea works, --raw for the roff |
@@ -214,9 +214,11 @@ not set, or whose local server is not running, is skipped.
 Any other OpenAI compatible server works with `base_url` and `key_env`. Calls to one provider are spaced by the
 roster's `[rate_limits]`. Keys travel only in headers, never in a URL, and never over plain HTTP to another machine.
 
-The packet holds the files in `[brief] include` and the plan. Free tiers may keep or train on what they receive, so
-`kea council` asks before it sends anything off the machine; `--yes` skips the question and `--dry-run` shows what
-would go where.
+The packet holds the files in `[brief] include` (only files inside the brain) and the plan, with anything shaped
+like a key replaced by [REDACTED]. Free tiers may keep or train on what they receive, so `kea council` asks before it
+sends anything off the machine, naming every host; `--yes` skips the question and `--dry-run` shows what would go
+where. A seat counts as on this machine only when its server is local, it is not marked `remote = true`, and its
+model is not an Ollama cloud model. A seat that sends your API key to a custom `base_url` is flagged.
 
 ## CALIBRATION
 
@@ -229,9 +231,10 @@ predictions came true: if your 80% predictions come true half the time, you are 
 
 kea is made to be used by AI agents as much as by people.
 
-**Skills.** `kea skill install` copies three skills into every agent folder it finds: ~/.claude/skills,
-~/.codex/skills, ~/.config/opencode/skills and ~/.agents/skills. kea teaches the rules and the session routine,
-kea-council runs a council review, kea-frameworks turns a source into a framework.
+**Skills.** `kea skill install` copies three skills to two places: ~/.claude/skills, which Claude Code and OpenCode
+read, and ~/.agents/skills, which Codex and other agents read. Writing an agent's own folder too would make it list
+every skill twice, so `--agent codex` and `--agent opencode` write those folders only when asked. kea teaches the
+rules and the session routine, kea-council runs a council review, kea-frameworks turns a source into a framework.
 
 **Claude Code plugin.** The repository is a plugin with the skills and the MCP server:
 
@@ -242,10 +245,13 @@ kea-council runs a council review, kea-frameworks turns a source into a framewor
 
 **MCP server.** `kea mcp` speaks the Model Context Protocol on stdio. Tools: brain_status, state, search, show,
 decisions, predictions, roadmap, check, plans, seats, effort, log_entry, record_fact, decide, revisit_decision,
-predict, score_prediction, add_idea, roadmap_add, roadmap_done, plan_new, brief, synth, ingest and council_run. Read
-tools are marked read only; council_run sends data off the machine and needs confirm set to true. Resources expose
-STATE.md, ROADMAP.md, DECISIONS.md, PREDICTIONS.md and AGENTS.md; prompts start_session, end_session and chair_review
-appear as slash commands in clients that show them.
+predict, score_prediction, add_idea, roadmap_add, roadmap_done, plan_new, brief, synth, ingest and council_run.
+Arguments are checked against each tool's schema. The server uses `KEA_BRAIN`, then your default brain, and only then
+a `kea.toml` above the folder the agent runs in, so a project's own files never take over; initialize names the brain
+in use. Two limits keep an agent from acting for you: ingest only rescans sources you added in a terminal, and
+council_run runs only the seats on this machine unless kea.toml sets `[council] agents_may_send = true`. Resources
+expose STATE.md, ROADMAP.md, DECISIONS.md, PREDICTIONS.md and AGENTS.md; prompts start_session, end_session and
+chair_review appear as slash commands in clients that show them.
 
 Claude Code, for every project:
 
@@ -261,14 +267,17 @@ command = "kea"
 args = ["mcp"]
 ```
 
-Cursor (~/.cursor/mcp.json), Gemini CLI (~/.gemini/settings.json) and Claude Desktop take the same JSON:
+Cursor (~/.cursor/mcp.json) and Gemini CLI (~/.gemini/settings.json) take this JSON. Claude Desktop takes it too, in
+claude_desktop_config.json, but starts servers without your shell's PATH: put the full path from `which kea` as the
+command there.
 
 ```json
 {"mcpServers": {"kea": {"command": "kea", "args": ["mcp"], "env": {"KEA_BRAIN": "/home/you/brain"}}}}
 ```
 
-Without kea installed, use `uvx` as the command and `--from git+https://github.com/jpsanders/kea kea mcp` as the
-arguments; the first start downloads it. Set `KEA_BRAIN` where the client starts servers outside your projects.
+Without kea installed, use `uvx` as the command and `--python 3.15 --from git+https://github.com/jpsanders/kea kea
+mcp` as the arguments; the first start downloads it. Set `KEA_BRAIN` where the client starts servers outside your
+projects.
 
 ## FILES
 
@@ -289,6 +298,14 @@ arguments; the first start downloads it. Set `KEA_BRAIN` where the client starts
 | CLAUDE_CONFIG_DIR, CODEX_HOME | Where Claude Code and Codex keep sessions and skills |
 | NO_COLOR | Plain output, no colour |
 
+## DOCKER
+
+```sh
+docker build -t kea . && docker run --rm -it --user "$(id -u):$(id -g)" -v ~/brain:/brain kea status
+```
+
+`--user` runs kea as you, so it can write your brain and its index.
+
 ## EXIT STATUS
 
 0 on success. 1 when a command fails, when kea check finds an error (or a warning, with --strict), or when no seat
@@ -296,10 +313,13 @@ returned. 2 for a mistake in the arguments. With --json, a failure also prints {
 
 ## PRIVACY AND SECURITY
 
-Everything stays on your machine: the brain is your folder, and the index is a SQLite file inside it that git
-ignores. kea never reads paths that name a credential store (.ssh, .aws, .env, .gnupg, credentials, secrets and more;
-add your own under [ingest] deny), and it replaces anything shaped like a key or token with [REDACTED] before storing
-text. The only network calls are the council seats you configure and run. Report security problems privately:
+Everything stays on your machine: the brain is your folder, and the index is a SQLite file inside it, readable only
+by you, that git ignores. kea never reads paths that name a credential store (.ssh, .aws, .env and .env.local, shell
+histories, .pem and .key files, credentials, secrets and more; add your own patterns under [ingest] deny), judges a
+symbolic link by where it points, and replaces anything shaped like a key or token with [REDACTED] before it stores
+text, before it writes to the ledger, and before a packet leaves. Changing the deny list rereads what it affects;
+a forgotten source stays out of later scans. The only network calls are the council seats you configure and run, and
+no request follows a redirect. Report security problems privately:
 https://github.com/jpsanders/kea/security/advisories/new
 
 ## PERFORMANCE

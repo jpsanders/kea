@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from kea.brain import Brain
+from kea.brain import INDEX_DIR, Brain
 from kea.ledger import is_decided
 from kea.providers import ProviderError, Seat, complete, probe
+from kea.redact import is_denied, redact_count
 
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,80}$")
 JSON_BLOCK = re.compile(r"<!--\s*COUNCIL-JSON\s*(.*?)\s*COUNCIL-JSON\s*-->", re.S)
@@ -109,7 +110,7 @@ def check_slug(slug: str) -> str:
     :returns: The slug
     :raises CouncilError: When it has characters a folder name should not
     """
-    if not SLUG.match(slug):
+    if not SLUG.fullmatch(slug):
         raise CouncilError("a plan slug is lowercase letters, digits and hyphens, such as 2026-12-pricing")
     return slug
 
@@ -137,8 +138,8 @@ def plan_new(brain: Brain, slug: str) -> list[str]:
                 (target / item.name).write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
     (target / "reviews").mkdir(exist_ok=True)
     for path in target.rglob("*.md"):
-        text = path.read_text(encoding="utf-8").replace("<slug>", slug).replace("{{today}}", brain.today().isoformat())
-        path.write_text(text, encoding="utf-8")
+        text = path.read_text(encoding="utf-8").replace("<slug>", slug)
+        path.write_text(text.replace("{{plan_date}}", brain.today().isoformat()), encoding="utf-8")
     return sorted(str(p.relative_to(brain.root)) for p in target.rglob("*") if p.is_file())
 
 
@@ -193,6 +194,8 @@ class Packet:
     chars: int
     frameworks: list[str] = field(default_factory=list)
     sections: list[str] = field(default_factory=list)
+    refused: list[str] = field(default_factory=list)
+    redacted: int = 0
 
 
 def brief(brain: Brain, slug: str) -> Packet:
@@ -209,9 +212,14 @@ def brief(brain: Brain, slug: str) -> Packet:
     if not proposal.is_file():
         raise CouncilError(f"plans/{slug}/00-proposal.md is missing; start it with kea plan new {slug}")
     include = brain.setting("brief", "include", DEFAULT_INCLUDE)
-    parts, names = [], []
+    parts, names, refused = [], [], []
+    root = brain.root.resolve()
     for rel in include if isinstance(include, list) else DEFAULT_INCLUDE:
         path = brain.file(str(rel))
+        real = path.resolve()
+        if not real.is_relative_to(root) or is_denied(real) or INDEX_DIR in real.relative_to(root).parts[:1]:
+            refused.append(str(rel))
+            continue
         if path.is_file():
             parts.append(
                 f"## BRIEFING SECTION: {rel}\n**Source:** `{rel}`\n\n{path.read_text(encoding='utf-8').strip()}"
@@ -236,13 +244,13 @@ def brief(brain: Brain, slug: str) -> Packet:
     questions = plan / "01-review-questions.md"
     if questions.is_file():
         parts.append(f"## BRIEFING SECTION: REVIEW QUESTIONS\n\n{questions.read_text(encoding='utf-8').strip()}")
-    body = "\n\n---\n\n".join(parts) + "\n"
+    body, hidden = redact_count("\n\n---\n\n".join(parts) + "\n")
     digest = hashlib.sha256(body.encode()).hexdigest()[:12]
     packet = BANNER.format(slug=slug, date=brain.today().isoformat(), hash=digest) + body
     dest = brain.file("council", "briefing", f"{slug}.md")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(packet, encoding="utf-8")
-    return Packet(dest, digest, len(packet), used, names)
+    return Packet(dest, digest, len(packet), used, names, refused, hidden)
 
 
 @dataclass
@@ -264,7 +272,7 @@ def roster(brain: Brain) -> Roster:
     """
     path = brain.file("council", "roster.toml")
     if not path.is_file():
-        raise CouncilError("council/roster.toml is missing; run kea init again in this brain to restore it")
+        raise CouncilError(f"council/roster.toml is missing; kea init {brain.root} puts back missing files only")
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -297,7 +305,9 @@ def seats(brain: Brain, live: bool = False) -> list[dict[str, Any]]:
             "enabled": seat.enabled,
             "key": seat.key_env or "none needed",
             "ready": _ready(seat),
-            "local": seat.local,
+            "local": seat.stays_here,
+            "host": seat.host,
+            "custom": seat.custom and bool(seat.key_env),
         }
         if live and seat.ready:
             row["answered"], row["detail"] = probe(seat)
@@ -327,6 +337,7 @@ def run(
     only: list[str] | None = None,
     resume: bool = False,
     ask: Complete | None = None,
+    local_only: bool = False,
 ) -> dict[str, Any]:
     """
     Send the packet to every ready seat in parallel and save each review where no other seat will read it.
@@ -338,6 +349,7 @@ def run(
     :param only: Seat names to run; every ready seat when omitted
     :param resume: Skip seats that already have a review for this plan
     :param ask: The function that calls a model; the real providers when omitted
+    :param local_only: Run only the seats whose model is on this machine
     :returns: The manifest: one result per seat, with the packet hash
     :raises CouncilError: When there is no packet or no seat can run
     """
@@ -348,7 +360,7 @@ def run(
     m = re.search(r"\*\*Packet hash:\*\* (\w+)", packet)
     packet_hash = m[1] if m else "unknown"
     team = roster(brain)
-    chosen = [s for s in team.seats if (not only or s.name in only) and _ready(s)]
+    chosen = [s for s in team.seats if (not only or s.name in only) and (s.stays_here or not local_only) and _ready(s)]
     out_dir = brain.file("plans", slug, "reviews")
     out_dir.mkdir(parents=True, exist_ok=True)
     if resume:
@@ -373,8 +385,8 @@ def run(
                 system = SYSTEM.format(role=seat.role, owner=brain.owner, lens=seat.lens)
                 text = call(seat, system, packet + CONTRACT)
                 error = None
-            except ProviderError as exc:
-                text, error = "", str(exc)
+            except Exception as exc:  # noqa: BLE001  one seat failing must never cost the others their reviews
+                text, error = "", str(exc) if isinstance(exc, ProviderError) else f"{type(exc).__name__}: {exc}"
             finally:
                 last[seat.provider] = time.monotonic()
         result: dict[str, Any] = {"seat": seat.name, "provider": seat.provider, "model": seat.model}
@@ -409,23 +421,23 @@ def run(
 
 def parse_review(text: str) -> dict[str, Any] | None:
     """
-    Read the COUNCIL-JSON block at the end of a review, forgiving prose or a second object after the JSON.
+    Read the last COUNCIL-JSON block of a review that parses, forgiving prose or a second object after the JSON.
 
     :param text: The review
-    :returns: The block, or None when there is none or it does not parse
+    :returns: The block, or None when there is none or none parses
     """
-    m = JSON_BLOCK.search(text)
-    if not m:
-        return None
-    raw = m[1].strip()
-    try:
-        data = json.loads(raw)
-    except ValueError:
+    for m in reversed(list(JSON_BLOCK.finditer(text))):
+        raw = m[1].strip()
         try:
-            data = json.JSONDecoder().raw_decode(raw[raw.index("{") :])[0]
-        except ValueError:
-            return None
-    return data if isinstance(data, dict) else None
+            data = json.loads(raw)
+        except ValueError, RecursionError:
+            try:
+                data = json.JSONDecoder().raw_decode(raw[raw.index("{") :])[0]
+            except ValueError, RecursionError:
+                continue
+        if isinstance(data, dict):
+            return data
+    return None
 
 
 def _words(text: str) -> set[str]:
@@ -486,10 +498,17 @@ def synth(brain: Brain, slug: str) -> dict[str, Any]:
     recs: list[dict[str, Any]] = []
     for path in files:
         data = parse_review(path.read_text(encoding="utf-8"))
+        if data is not None and not isinstance(data.get("recommendations", []), list):
+            data = None
         seat = (data or {}).get("seat") or (path.name.split("_")[1] if path.name.count("_") >= 2 else path.stem)
         reviews.append({"file": path.name, "seat": str(seat), "data": data})
         for rec in (data or {}).get("recommendations") or []:
-            if isinstance(rec, dict) and rec.get("claim"):
+            if isinstance(rec, dict) and isinstance(rec.get("claim"), str) and rec["claim"].strip():
+                conf = rec.get("confidence")
+                rec = {
+                    **rec,
+                    "confidence": conf if isinstance(conf, (int, float)) and not isinstance(conf, bool) else None,
+                }
                 recs.append({**rec, "seat": str(seat)})
     parsed = [r for r in reviews if r["data"]]
     seats_n = len({r["seat"] for r in parsed}) or 1

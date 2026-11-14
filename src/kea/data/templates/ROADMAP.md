@@ -2,10 +2,10 @@
 
 Start every session here. STATE.md holds the facts; this file holds the work.
 
-1. **Start:** read this file, then the newest entries in STATE.md.
-2. **During:** one topic at a time. Each outcome goes into STATE.md as a dated entry.
-3. **End, before the context fills:** close what is done with the date and the proof, add what is new, and put
-   every question for {{owner}} under "Waiting for {{owner}}". Then `kea check`.
+Open a session by reading this file and the latest STATE.md entries. Work on one topic at a time and record each
+result in STATE.md with its date. Before the context runs out, tick off finished items with the date and how you
+know, list the new ones, and move every open question for {{owner}} under "Waiting for {{owner}}". Finish with
+`kea check`.
 
 ## Waiting for {{owner}}
 

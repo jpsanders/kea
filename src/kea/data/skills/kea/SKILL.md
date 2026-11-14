@@ -10,7 +10,7 @@ over their past AI sessions, chat exports, git history and notes. You reach it t
 command takes `--json`) or the kea MCP server (tools such as `brain_status`, `search`, `log_entry`). Both find the
 brain the same way: `--brain`, then `$KEA_BRAIN`, then the current folder and its parents, then the user's default.
 
-If `kea` is not installed: `uv tool install git+https://github.com/jpsanders/kea` (Python 3.15; uv fetches it).
+If `kea` is not installed: `uv tool install --python 3.15 git+https://github.com/jpsanders/kea` (uv fetches 3.15).
 If there is no brain yet, ask the user where it should live, then `kea init <folder>`.
 
 ## Start of a session

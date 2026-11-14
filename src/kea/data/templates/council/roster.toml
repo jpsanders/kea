@@ -6,6 +6,8 @@
 # provider: openai, anthropic, gemini, mistral, groq, cerebras, nvidia, openrouter, deepseek, xai, ollama, lmstudio,
 #           or any OpenAI compatible server with base_url (and key_env when it needs a key).
 # A seat whose key variable is not set is skipped. Check them with: kea seats --probe
+# Mark a seat remote = true when a localhost address forwards elsewhere (a proxy, a tunnel). Ollama models whose tag
+# ends in "cloud" run on Ollama's servers, so kea counts them as outside this machine.
 #
 # What you send: the packet holds the files in [brief] include (kea.toml) and the plan. Free tiers may keep or train
 # on what they receive. Send personal data only to local models (ollama, lmstudio) or providers whose terms you read.

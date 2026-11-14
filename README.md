@@ -30,13 +30,13 @@ Plain Markdown in a folder you own. One Python package with no dependencies. A C
 and a Claude Code plugin.
 
 ```sh
-uv tool install git+https://github.com/jpsanders/kea      # uv fetches Python 3.15 if you lack it
+uv tool install --python 3.15 git+https://github.com/jpsanders/kea      # uv fetches Python 3.15 if missing
 kea init ~/tidewater --example && cd ~/tidewater && kea status
 ```
 
 ```text
 kea Tidewater Coffee · ~/tidewater
-  state        updated yesterday · 7 facts, 1 past recheck · 2 UNVERIFIED
+  state        updated yesterday · 7 facts, 1 past recheck · 1 UNVERIFIED
   decisions    2 active · 1 due for revisit (D-0002)
   predictions  3 open · 1 due to score (P-0007) · 6 scored, Brier 0.23 (+7% vs a coin)
   roadmap      2 waiting for Mara · 3 next · 1 date in 14 days
@@ -139,7 +139,7 @@ routine.
 **Skills** for Claude Code, Codex, OpenCode and any agent that reads `~/.agents/skills`:
 
 ```sh
-kea skill install        # kea, kea-council and kea-frameworks, into every agent folder found
+kea skill install        # into ~/.claude/skills (Claude Code, OpenCode) and ~/.agents/skills (Codex and more)
 ```
 
 **Claude Code plugin**, with the skills and the MCP server in one:
@@ -167,8 +167,12 @@ args = ["mcp"]
 {"mcpServers": {"kea": {"command": "kea", "args": ["mcp"], "env": {"KEA_BRAIN": "/home/you/brain"}}}}
 ```
 
-The JSON works for Cursor (`~/.cursor/mcp.json`), Gemini CLI (`~/.gemini/settings.json`) and Claude Desktop. Without
-kea installed, use `uvx` with `--from git+https://github.com/jpsanders/kea kea mcp`.
+The JSON works for Cursor (`~/.cursor/mcp.json`) and Gemini CLI (`~/.gemini/settings.json`). For Claude Desktop, put
+the full path from `which kea` as the command, because it starts servers without your shell's PATH. Without kea
+installed, use `uvx` with `--python 3.15 --from git+https://github.com/jpsanders/kea kea mcp`.
+
+An agent can read and keep the ledger, but two things stay yours: it can only rescan sources you added in a terminal,
+and it can only send a council packet off your machine if your `kea.toml` says `[council] agents_may_send = true`.
 
 ## The rules
 
@@ -184,20 +188,20 @@ kea installed, use `uvx` with `--from git+https://github.com/jpsanders/kea kea m
 ## Install
 
 ```sh
-uv tool install git+https://github.com/jpsanders/kea                 # recommended
-pipx install git+https://github.com/jpsanders/kea
+uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # recommended
+pipx install --python python3.15 git+https://github.com/jpsanders/kea
 pip install https://github.com/jpsanders/kea/releases/download/1.0.0/kea_brain-1.0.0-py3-none-any.whl
-docker build -t kea . && docker run --rm -it -v ~/brain:/brain kea status
+docker build -t kea . && docker run --rm -it --user "$(id -u):$(id -g)" -v ~/brain:/brain kea status
 ```
 
-kea needs Python 3.15; uv downloads it for you. The distribution is called `kea-brain` and the command is `kea`.
+kea needs Python 3.15; with `--python 3.15`, uv downloads it for you. The distribution is called `kea-brain` and the command is `kea`.
 Then `kea man --install` makes `man kea` work.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `kea init [path] [--example]` | Make a brain; the first one becomes your default |
+| `kea init [path] [--example]` | Make a brain (the first real one becomes your default), or put back missing files |
 | `kea status` / `kea check` | The whole brain with health checks / lint it, exit 1 on errors |
 | `kea state` / `kea log` / `kea fact` | Facts and the dated log |
 | `kea decide` / `kea decisions` / `kea revisit` | Decisions and closing their loop |
@@ -213,11 +217,12 @@ Everything is in the [manual](docs/MANUAL.md): `kea guide` prints it, `man kea` 
 
 ## Privacy
 
-Your brain is a folder you own; the index is a SQLite file inside it that git ignores. kea has no telemetry and no
-account. Ingest opens your sources read only, never opens paths such as `.ssh`, `.aws`, `.env` or `credentials`, and
-redacts anything shaped like a key or a token before storing it. The only thing that ever leaves your machine is a
-council packet, and `kea council` asks before it sends one. API keys travel in headers, never in URLs. More in
-[SECURITY.md](SECURITY.md).
+Your brain is a folder you own; the index is a SQLite file inside it, readable only by you, that git ignores. kea has
+no telemetry and no account. Ingest opens your sources read only, never opens paths such as `.ssh`, `.aws`, `.env`,
+shell histories or `credentials` (a symbolic link is judged by where it points), and redacts anything shaped like a
+key or a token before storing it, before writing it to the ledger, and before a packet leaves. The only thing that
+ever leaves your machine is a council packet, and `kea council` asks first, naming every host. API keys travel in
+headers, never in URLs, and no request follows a redirect. More in [SECURITY.md](SECURITY.md).
 
 ## Performance
 

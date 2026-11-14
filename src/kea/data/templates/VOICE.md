@@ -6,7 +6,7 @@ Rules an agent follows when it writes as {{owner}} or for them. These are starti
 
 | Rule | Wrong | Right |
 | --- | --- | --- |
-| Short declarative sentences | "We are excited to announce a platform that changes your work." | "It saves 2 hours." |
+| Keep sentences short | "Our team is thrilled to share an update that transforms your work." | "Reports take 1 hour." |
 | Concrete numbers over adjectives | "Strong growth" | "Revenue rose 18% in October" |
 | Active voice | "The decision was made to pause" | "I paused it" |
 | No filler | "In order to", "it is worth noting that" | Say the thing |

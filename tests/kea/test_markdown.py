@@ -44,7 +44,7 @@ def test_parse_entries_reads_ids_heads_fields_and_extra_lines() -> None:
     second, first = entries
     assert second.head == ["2026-11-10", "Second one"]
     assert second.get("status") == "ACTIVE carried on onto a second line"
-    assert second.extra == ["A note the person wrote by hand."]
+    assert second.body[-1] == "A note the person wrote by hand."
     assert first.head == ["2026-11-01", "First one"]
     assert first.get("missing", "x") == "x"
 
@@ -75,9 +75,10 @@ def test_next_id_and_render_round_trip() -> None:
     entries = parse_entries(LEDGER.splitlines())
     assert next_id(entries, "D") == "D-0003"
     assert next_id([], "P") == "P-0001"
-    entry = Entry("P-0001", ["by 2026-12-01", "60%", "A claim"], {"Status": "OPEN"})
+    entry = Entry("P-0001", ["by 2026-12-01", "60%", "A claim"])
+    entry.set("Status", "OPEN")
     again = parse_entries(entry.render())[0]
-    assert again.head == entry.head and again.fields == entry.fields
+    assert again.head == entry.head and again.fields == entry.fields == {"Status": "OPEN"}
 
 
 def test_malformed_headings_are_reported() -> None:

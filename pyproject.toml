@@ -61,6 +61,7 @@ kea = "kea.cli:main"
 [tool.setuptools_scm]
 fallback_version = "0.0.0"
 version_file = "src/kea/_version.py"
+version_file_template = """__version__ = "{version}"\n"""
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -87,6 +88,7 @@ known_first_party = ["kea"]
 [tool.black]
 line-length = 120
 include = '\.pyi?$'
+extend-exclude = 'src/kea/_version\.py'
 exclude = '''
 /(
       venv

@@ -23,14 +23,16 @@ def test_install_into_found_agents(tmp_path: Path) -> None:
     (home / ".claude").mkdir()
     (home / ".codex").mkdir()
     rows = skills.install(dry_run=True)
-    assert {r["agent"] for r in rows} == {"claude", "codex"} and {r["action"] for r in rows} == {"would write"}
+    assert {r["agent"] for r in rows} == {"claude", "agents"} and {r["action"] for r in rows} == {"would write"}
     assert not (home / ".claude" / "skills").exists()
     rows = skills.install()
     assert {r["action"] for r in rows} == {"installed"}
     assert (home / ".claude" / "skills" / "kea" / "SKILL.md").is_file()
     assert {r["action"] for r in skills.install()} == {"up to date"}
-    (home / ".codex" / "skills" / "kea" / "SKILL.md").write_text("old")
-    assert "updated" in {r["action"] for r in skills.install(["codex"])}
+    assert not (home / ".codex" / "skills").exists()
+    (home / ".agents" / "skills" / "kea" / "SKILL.md").write_text("old")
+    assert "updated" in {r["action"] for r in skills.install(["agents"])}
+    assert {r["action"] for r in skills.install(["codex"])} == {"installed"}
     with pytest.raises(KeyError):
         skills.install(["vim"])
 

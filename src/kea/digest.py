@@ -7,6 +7,7 @@ in the raw transcript (``[L123]``), so the full record is one jump away when the
 """
 
 import json
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -79,10 +80,11 @@ def latest_transcript(cwd: Path, config_dir: Path | None = None) -> Path | None:
     Find the newest Claude Code transcript for a project folder.
 
     :param cwd: The project folder the session ran in
-    :param config_dir: Claude Code's config folder; ``~/.claude`` when omitted
+    :param config_dir: Claude Code's config folder; ``$CLAUDE_CONFIG_DIR`` or ``~/.claude`` when omitted
     :returns: The transcript, or None
     """
-    projects = (config_dir or Path.home() / ".claude") / "projects"
+    base = config_dir or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    projects = base / "projects"
     here = str(cwd.resolve())
     for name in (re.sub(r"[^A-Za-z0-9]", "-", here), here.replace("/", "-")):
         folder = projects / name
@@ -110,7 +112,7 @@ def digest(source: Path, out_dir: Path, label: str | None = None, tz: str | None
     except ZoneInfoNotFoundError, ValueError:
         zone = None
     folder = out_dir / (label or source.stem)
-    folder.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     result = Digest(str(source), str(folder))
     tools: Counter[str] = Counter()
     names: dict[str, str] = {}
@@ -188,14 +190,21 @@ def digest(source: Path, out_dir: Path, label: str | None = None, tz: str | None
     )
     spaced = {"USER", "ASSISTANT", "SUMMARY"}
     body = "\n".join(text + ("\n" if kind in spaced else "") for kind, text in records)
-    (folder / "digest.md").write_text(redact(f"# Session digest: {folder.name}\n\nSource: {source}\n{note}\n{body}\n"))
+    _private(folder / "digest.md", f"# Session digest: {folder.name}\n\nSource: {source}\n{note}\n{body}\n")
     prompts = "\n\n".join(text for kind, text in records if kind == "USER")
-    (folder / "prompts.md").write_text(redact(f"# Every prompt in {folder.name}, verbatim, in order\n\n{prompts}\n"))
+    _private(folder / "prompts.md", f"# Every prompt in {folder.name}, verbatim, in order\n\n{prompts}\n")
     parts = [f"# {folder.name}: each prompt with the assistant's closing reply\n"]
     for i, turn in enumerate(turns, 1):
         last = turn["replies"][-1] if turn["replies"] else "(no reply text in this turn)"
         parts.append(f"## Turn {i}, {turn['when']}\n\n{turn['prompt']}\n\n**Reply:**\n\n{last}\n")
-    (folder / "turns.md").write_text(redact("\n".join(parts)))
-    meta = dict(result.__dict__)
-    (folder / "meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False) + "\n")
+    _private(folder / "turns.md", "\n".join(parts))
+    result.titles = [redact(t) for t in result.titles]
+    _private(folder / "meta.json", json.dumps(dict(result.__dict__), indent=1, ensure_ascii=False) + "\n")
     return result
+
+
+def _private(path: Path, text: str) -> None:
+    """Write a file only its owner can read, with secrets redacted."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(redact(text))

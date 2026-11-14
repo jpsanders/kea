@@ -3,7 +3,8 @@ The ledger: facts, the dated log, decisions, predictions, ideas and the roadmap,
 
 Every write goes through the same rules: one fact is one sourced, dated row; a decision carries why and when to look
 again; a prediction carries a date and a confidence, and gets scored. :func:`check` lints the lot and :func:`status`
-reads it back as one picture, health checks included.
+reads it back as one picture, health checks included. Writes touch only the lines they own: a second outcome or note
+is added below the first, never over it. Nothing shaped like a key or a token is ever written: it becomes [REDACTED].
 """
 
 import re
@@ -16,6 +17,8 @@ from kea.brain import Brain, parse_date
 from kea.markdown import (
     SEP,
     Entry,
+    clean_part,
+    first_table,
     insert_after_marker,
     is_separator,
     malformed_headings,
@@ -29,6 +32,7 @@ from kea.markdown import (
     table_row,
     write_lines,
 )
+from kea.redact import redact
 
 STATE = "STATE.md"
 DECISIONS = "DECISIONS.md"
@@ -48,13 +52,13 @@ class LedgerError(Exception):
 
 
 def _clean(text: str) -> str:
-    return " ".join(str(text).split())
+    return redact(" ".join(str(text).split()))
 
 
 def _need_file(brain: Brain, name: str) -> Path:
     path = brain.file(name)
     if not path.is_file():
-        raise LedgerError(f"{name} is missing from {brain.root}; run kea init {brain.root} to restore it")
+        raise LedgerError(f"{name} is missing; kea init {brain.root} puts back missing files and changes nothing else")
     return path
 
 
@@ -72,31 +76,27 @@ class Fact:
     line: int
 
 
+def _facts_table(lines: list[str]) -> tuple[int, int] | None:
+    span = section_span(lines, "Facts")
+    return first_table(lines, span[0] + 1, span[1]) if span else None
+
+
 def facts(brain: Brain) -> list[Fact]:
     """
-    Read STATE.md's facts table.
+    Read STATE.md's facts table: the first table under ``## Facts``.
 
     :param brain: The brain
     :returns: The facts, in table order
     """
     lines = read_lines(brain.file(STATE))
-    span = section_span(lines, "Facts")
-    if not span:
+    table = _facts_table(lines)
+    if not table:
         return []
     out = []
-    header_seen = False
-    for i in range(span[0] + 1, span[1]):
-        line = lines[i]
-        if not line.strip().startswith("|"):
-            if header_seen and line.strip():
-                break
+    for i in range(table[0] + 1, table[1]):
+        if is_separator(lines[i]):
             continue
-        if is_separator(line):
-            continue
-        cells = table_cells(line) + ["", "", "", ""]
-        if not header_seen:
-            header_seen = True
-            continue
+        cells = table_cells(lines[i]) + ["", "", "", ""]
         out.append(Fact(cells[0], cells[1], cells[2], cells[3], i + 1))
     return out
 
@@ -104,6 +104,8 @@ def facts(brain: Brain) -> list[Fact]:
 def set_fact(brain: Brain, fact: str, value: str, source: str, verified: str | None = None) -> dict[str, Any]:
     """
     Record a fact with its source and the date it was verified, replacing the row of the same name.
+
+    Columns a person added after the fourth are kept.
 
     :param brain: The brain
     :param fact: What the fact is about, such as ``Cash on hand``
@@ -121,27 +123,23 @@ def set_fact(brain: Brain, fact: str, value: str, source: str, verified: str | N
         raise LedgerError(f"not a date: {verified!r}")
     path = _need_file(brain, STATE)
     lines = read_lines(path)
-    row = table_row([fact, value, source, when.isoformat()])
+    cells = [fact, value, source, when.isoformat()]
     existing = {f.fact.lower(): f for f in facts(brain)}
     created = fact.lower() not in existing
     if not created:
-        lines[existing[fact.lower()].line - 1] = row
+        index = existing[fact.lower()].line - 1
+        lines[index] = table_row(cells + table_cells(lines[index])[4:])
     else:
+        header = [table_row(["Fact", "Value", "Source", "Verified"]), "| --- | --- | --- | --- |"]
         span = section_span(lines, "Facts")
-        if span is None:
-            title = next((i for i, ln in enumerate(lines) if ln.startswith("# ")), -1)
-            block = ["## Facts", "", table_row(["Fact", "Value", "Source", "Verified"]), "| --- | --- | --- | --- |"]
-            lines[title + 1 : title + 1] = [""] + block + [row, ""]
+        table = _facts_table(lines)
+        if table:
+            lines.insert(table[1], table_row(cells))
+        elif span:
+            lines[span[0] + 1 : span[0] + 1] = [""] + header + [table_row(cells)]
         else:
-            last = span[0]
-            for i in range(span[0] + 1, span[1]):
-                if lines[i].strip().startswith("|"):
-                    last = i
-            if last == span[0]:
-                header = [table_row(["Fact", "Value", "Source", "Verified"]), "| --- | --- | --- | --- |"]
-                lines[last + 1 : last + 1] = [""] + header + [row]
-            else:
-                lines.insert(last + 1, row)
+            title = next((i for i, ln in enumerate(lines) if ln.startswith("# ")), -1)
+            lines[title + 1 : title + 1] = ["", "## Facts", ""] + header + [table_row(cells), ""]
     write_lines(path, lines)
     return {"fact": fact, "value": value, "source": source, "verified": when.isoformat(), "new": created}
 
@@ -157,13 +155,13 @@ def log(brain: Brain, text: str, title: str | None = None, source: str | None = 
     :returns: The entry written
     :raises LedgerError: When the text is empty
     """
-    text = text.strip()
+    text = redact(text.strip())
     if not text:
         raise LedgerError("a log entry needs text")
     if not title:
         first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
         title = first if len(first) <= 80 else first[:77].rsplit(" ", 1)[0] + "..."
-    title = _clean(title).rstrip(".")
+    title = redact(clean_part(title)).rstrip(".")
     moment = brain.now()
     body = text + (f"\n\nSource: {_clean(source)}" if source else "")
     block = [f"### {moment:%Y-%m-%d %H:%M}{SEP}{title}", ""] + body.splitlines()
@@ -172,24 +170,32 @@ def log(brain: Brain, text: str, title: str | None = None, source: str | None = 
     return {"date": f"{moment:%Y-%m-%d}", "time": f"{moment:%H:%M}", "title": title, "text": text, "source": source}
 
 
+def _unverified(lines: list[str]) -> int:
+    count = 0
+    for title in ("Facts", "Log"):
+        span = section_span(lines, title)
+        if span:
+            count += sum(line.count("UNVERIFIED") for line in lines[span[0] + 1 : span[1]])
+    return count
+
+
 def state(brain: Brain, entries: int = 5) -> dict[str, Any]:
     """
     Read what is true now: every fact and the newest log entries.
 
     :param brain: The brain
     :param entries: How many log entries to return
-    :returns: Facts, entries and the count of UNVERIFIED markers
+    :returns: Facts, entries, the count of UNVERIFIED markers and the lines of log headings with impossible dates
     """
     lines = read_lines(brain.file(STATE))
-    log_entries = parse_log(lines)
-    log_entries.sort(key=lambda e: (e.date, e.time), reverse=True)
+    parsed = parse_log(lines)
+    good = sorted((e for e in parsed if e.valid), key=lambda e: (e.date, e.time), reverse=True)
     return {
         "facts": [{k: v for k, v in asdict(f).items() if k != "line"} for f in facts(brain)],
-        "log": [
-            {"date": e.date, "time": e.time, "title": e.title, "text": "\n".join(e.body)} for e in log_entries[:entries]
-        ],
-        "log_total": len(log_entries),
-        "unverified": sum(line.count("UNVERIFIED") for line in lines),
+        "log": [{"date": e.date, "time": e.time, "title": e.title, "text": "\n".join(e.body)} for e in good[:entries]],
+        "log_total": len(good),
+        "bad_dates": [e.line for e in parsed if not e.valid],
+        "unverified": _unverified(lines),
     }
 
 
@@ -212,14 +218,22 @@ def _find(entries: list[Entry], ident: str) -> Entry:
     raise LedgerError(f"no entry {ident}")
 
 
+def _note(entry: Entry, key: str, value: str, today: str) -> None:
+    """Set a field the first time; add a dated line below the earlier ones after that, so nothing is overwritten."""
+    if entry.values(key):
+        entry.add(key, f"({today}) {value}")
+    else:
+        entry.set(key, value)
+
+
 def _decision_view(entry: Entry, today: date) -> dict[str, Any]:
     revisit = entry.get("Revisit")
     when = parse_date(revisit, today) if revisit and re.search(r"\d{4}-\d{2}-\d{2}", revisit) else None
-    status = entry.get("Status", "ACTIVE").upper().split()[0] if entry.get("Status") else "ACTIVE"
+    status = (entry.get("Status") or "ACTIVE").upper().split()[0]
     return {
         "id": entry.id,
         "date": entry.head[0] if entry.head else "",
-        "title": entry.head[1] if len(entry.head) > 1 else "",
+        "title": SEP.join(entry.head[1:]),
         "decision": entry.get("Decision"),
         "status": status,
         "why": entry.get("Why"),
@@ -252,18 +266,17 @@ def decide(
     """
     if not (title.strip() and decision.strip()):
         raise LedgerError("a decision needs a title and the decision itself")
-    path, lines, entries = _entries(brain, DECISIONS)
-    if not path.is_file():
-        raise LedgerError(f"{DECISIONS} is missing; run kea init {brain.root} to restore it")
+    path = _need_file(brain, DECISIONS)
+    lines = read_lines(path)
     when = parse_date(revisit, brain.today()) if revisit else None
-    entry = Entry(next_id(entries, "D"), [brain.today().isoformat(), _clean(title)], {})
-    entry.set("Decision", decision)
+    entry = Entry(next_id(parse_entries(lines), "D"), [brain.today().isoformat(), _clean(clean_part(title))])
+    entry.set("Decision", _clean(decision))
     entry.set("Status", "ACTIVE")
     if why:
-        entry.set("Why", why)
-    entry.set("Revisit", when.isoformat() if when else (revisit or "not set"))
+        entry.set("Why", _clean(why))
+    entry.set("Revisit", when.isoformat() if when else (_clean(revisit or "") or "not set"))
     if source:
-        entry.set("Source", source)
+        entry.set("Source", _clean(source))
     write_lines(path, insert_after_marker(lines, "kea:entries", entry.render()))
     return _decision_view(entry, brain.today())
 
@@ -295,6 +308,8 @@ def revisit(
     """
     Close the loop on a decision: what actually happened, how surprising it was, and what changes.
 
+    A decision revisited again keeps its earlier outcome and lesson: the new ones are added below with their date.
+
     :param brain: The brain
     :param ident: The decision's id, such as ``D-0002`` or ``2``
     :param outcome: What actually happened
@@ -311,12 +326,13 @@ def revisit(
         raise LedgerError(f"status must be one of {', '.join(DECISION_STATUSES)}")
     if surprise is not None and not 0 <= surprise <= 10:
         raise LedgerError("surprise is 0 to 10")
-    entry.set("Outcome", outcome)
+    today = brain.today().isoformat()
+    _note(entry, "Outcome", _clean(outcome), today)
     if surprise is not None:
-        entry.set("Surprise", str(surprise))
+        _note(entry, "Surprise", str(surprise), today)
     if lesson:
-        entry.set("Lesson", lesson)
-    entry.set("Revisited", brain.today().isoformat())
+        _note(entry, "Lesson", _clean(lesson), today)
+    entry.set("Revisited", today)
     if status:
         entry.set("Status", status.upper())
     if next_revisit:
@@ -333,14 +349,14 @@ def _prediction_view(entry: Entry, today: date) -> dict[str, Any]:
     by_text = entry.head[0] if entry.head else ""
     by = parse_date(by_text.removeprefix("by").strip(), today) if by_text else None
     conf_text = entry.head[1] if len(entry.head) > 1 else ""
-    m = re.search(r"(\d{1,3})", conf_text)
-    confidence = int(m[1]) if m else None
+    m = re.fullmatch(r"(\d{1,3})\s*%?", conf_text.strip())
+    confidence = int(m[1]) if m and int(m[1]) <= 100 else None
     status = (entry.get("Status") or "OPEN").upper().split()[0]
     return {
         "id": entry.id,
         "by": by.isoformat() if by else by_text,
         "confidence": confidence,
-        "claim": entry.head[2] if len(entry.head) > 2 else entry.get("Claim"),
+        "claim": SEP.join(entry.head[2:]) or entry.get("Claim"),
         "status": status,
         "made": entry.get("Made"),
         "plan": entry.get("Plan"),
@@ -371,7 +387,7 @@ def predict(
     :returns: The prediction written
     :raises LedgerError: When the claim is empty, the date is not a date or the confidence is out of range
     """
-    claim = _clean(claim)
+    claim = _clean(clean_part(claim))
     if not claim:
         raise LedgerError("a prediction needs a claim")
     when = parse_date(by, brain.today())
@@ -379,23 +395,22 @@ def predict(
         raise LedgerError(f"not a date: {by!r} (use 2026-12-01, +30d, +6w or +3m)")
     if not 0 <= confidence <= 100:
         raise LedgerError("confidence is 0 to 100")
-    path, lines, entries = _entries(brain, PREDICTIONS)
-    if not path.is_file():
-        raise LedgerError(f"{PREDICTIONS} is missing; run kea init {brain.root} to restore it")
-    entry = Entry(next_id(entries, "P"), [f"by {when.isoformat()}", f"{confidence}%", claim], {})
+    path = _need_file(brain, PREDICTIONS)
+    lines = read_lines(path)
+    entry = Entry(next_id(parse_entries(lines), "P"), [f"by {when.isoformat()}", f"{confidence}%", claim])
     entry.set("Made", brain.today().isoformat())
     entry.set("Status", "OPEN")
     if plan:
-        entry.set("Plan", plan)
+        entry.set("Plan", _clean(plan))
     if decision:
-        entry.set("Decision", decision.upper())
+        entry.set("Decision", _clean(decision).upper())
     write_lines(path, insert_after_marker(lines, "kea:entries", entry.render()))
     return _prediction_view(entry, brain.today())
 
 
 def score(brain: Brain, ident: str, outcome: str, note: str | None = None) -> dict[str, Any]:
     """
-    Score a prediction against what happened.
+    Score a prediction against what happened. A note written earlier is kept; the new one goes below it.
 
     :param brain: The brain
     :param ident: The prediction's id, such as ``P-0004`` or ``4``
@@ -410,10 +425,11 @@ def score(brain: Brain, ident: str, outcome: str, note: str | None = None) -> di
         raise LedgerError("outcome must be true, false, partial or void")
     path, lines, entries = _entries(brain, PREDICTIONS)
     entry = _find(entries, ident)
+    today = brain.today().isoformat()
     entry.set("Status", word)
-    entry.set("Scored", brain.today().isoformat())
+    entry.set("Scored", today)
     if note:
-        entry.set("Note", note)
+        _note(entry, "Note", _clean(note), today)
     write_lines(path, replace_entry(lines, entry))
     return _prediction_view(entry, brain.today())
 
@@ -493,14 +509,13 @@ def idea(brain: Brain, text: str, why: str | None = None) -> dict[str, Any]:
     text = _clean(text)
     if not text:
         raise LedgerError("an idea needs text")
-    path, lines, entries = _entries(brain, IDEAS)
-    if not path.is_file():
-        raise LedgerError(f"{IDEAS} is missing; run kea init {brain.root} to restore it")
-    title = text if len(text) <= 70 else text[:67].rsplit(" ", 1)[0] + "..."
-    entry = Entry(next_id(entries, "I"), [brain.today().isoformat(), title], {})
+    path = _need_file(brain, IDEAS)
+    lines = read_lines(path)
+    title = clean_part(text if len(text) <= 70 else text[:67].rsplit(" ", 1)[0] + "...")
+    entry = Entry(next_id(parse_entries(lines), "I"), [brain.today().isoformat(), title])
     entry.set("Words", text)
     if why:
-        entry.set("Why", why)
+        entry.set("Why", _clean(why))
     entry.set("Status", "PARKED")
     write_lines(path, insert_after_marker(lines, "kea:entries", entry.render()))
     return {"id": entry.id, "date": entry.head[0], "title": title, "status": "PARKED"}
@@ -517,7 +532,7 @@ def ideas(brain: Brain) -> list[dict[str, Any]]:
         {
             "id": e.id,
             "date": e.head[0] if e.head else "",
-            "title": e.head[1] if len(e.head) > 1 else "",
+            "title": SEP.join(e.head[1:]),
             "status": (e.get("Status") or "PARKED").upper(),
         }
         for e in _entries(brain, IDEAS)[2]
@@ -527,7 +542,7 @@ def ideas(brain: Brain) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------- roadmap
 
 
-ITEM = re.compile(r"^\s*- \[(?P<done>[ xX])\] (?P<text>.*)$")
+ITEM = re.compile(r"^- \[(?P<done>[ xX])\] (?P<text>.*)$")
 
 
 def roadmap(brain: Brain) -> dict[str, Any]:
@@ -561,9 +576,27 @@ def roadmap(brain: Brain) -> dict[str, Any]:
     return out
 
 
+def _after_item(lines: list[str], index: int, end: int) -> int:
+    """Return where the next item goes: past an item's continuation lines and nested points, before what follows."""
+    j = index + 1
+    while j < end:
+        if lines[j][:1] in (" ", "\t") and lines[j].strip():
+            j += 1
+            continue
+        if not lines[j].strip():
+            k = j
+            while k < end and not lines[k].strip():
+                k += 1
+            if k < end and lines[k][:1] in (" ", "\t"):
+                j = k
+                continue
+        break
+    return j
+
+
 def roadmap_add(brain: Brain, text: str, section: str = "next") -> dict[str, Any]:
     """
-    Add an open item to a roadmap section.
+    Add an open item to a roadmap section, after the last item and its sub points.
 
     :param brain: The brain
     :param text: The item
@@ -582,17 +615,16 @@ def roadmap_add(brain: Brain, text: str, section: str = "next") -> dict[str, Any
     item = f"- [ ] {text} (added {brain.today().isoformat()})"
     span = section_span(lines, ROADMAP_SECTIONS[section])
     if span is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
         lines += ["", f"## {title}", "", item]
     else:
-        last = span[0]
-        for i in range(span[0] + 1, span[1]):
-            if ITEM.match(lines[i]):
-                last = i
-        if last == span[0]:
+        items = [i for i in range(span[0] + 1, span[1]) if ITEM.match(lines[i])]
+        if items:
+            lines.insert(_after_item(lines, items[-1], span[1]), item)
+        else:
             last = max((i for i in range(span[0], span[1]) if lines[i].strip()), default=span[0])
             lines[last + 1 : last + 1] = ["", item]
-        else:
-            lines.insert(last + 1, item)
     write_lines(path, lines)
     return {"section": section, "text": text}
 
@@ -607,12 +639,16 @@ def roadmap_done(brain: Brain, ref: str, proof: str | None = None) -> dict[str, 
     :returns: The item closed
     :raises LedgerError: When no single open item matches
     """
+    ref = ref.strip()
+    if not ref:
+        raise LedgerError("name the item to close: its number from kea roadmap, or a piece of its text")
     view = roadmap(brain)
     items = view["waiting"] + view["next"] + view["running"]
-    if ref.strip().isdigit():
-        hits = [i for i in items if i["n"] == int(ref)]
-    else:
-        hits = [i for i in items if ref.strip().lower() in i["text"].lower()]
+    hits = (
+        [i for i in items if i["n"] == int(ref)]
+        if ref.isdigit()
+        else [i for i in items if ref.lower() in i["text"].lower()]
+    )
     if len(hits) != 1:
         raise LedgerError(f"{len(hits)} open items match {ref!r}; use the number from kea roadmap")
     path = _need_file(brain, ROADMAP)
@@ -651,20 +687,46 @@ def framework_gaps(path: Path) -> list[str]:
     :param path: The framework file
     :returns: The gaps, in words
     """
-    text = path.read_text(encoding="utf-8")
+    lines = read_lines(path)
     gaps = []
-    span = section_span(text.splitlines(), "Boundary Conditions")
+    span = section_span(lines, "Boundary Conditions")
     filled = False
     if span:
-        rows = [ln for ln in text.splitlines()[span[0] : span[1]] if ln.strip().startswith("|")]
+        rows = [ln for ln in lines[span[0] : span[1]] if ln.strip().startswith("|")]
         body = [r for r in rows[1:] if not is_separator(r)]
         filled = any(any(c for c in table_cells(r)) for r in body)
     if not filled:
         gaps.append("no boundary conditions")
-    m = re.search(r"^retrodiction_score:\s*(.*)$", text, re.M)
+    m = re.search(r"^retrodiction_score:\s*(.*)$", "\n".join(lines), re.M)
     if not m or not re.match(r"\d", m[1].strip()):
         gaps.append("no retrodiction score")
     return gaps
+
+
+def is_decided(plan: Path) -> bool:
+    """
+    Tell whether a plan was decided: its production plan carries a ``**Decided:**`` date, not just the template.
+
+    :param plan: The plan's folder
+    :returns: True once decided
+    """
+    path = plan / "20-production-plan.md"
+    if not path.is_file():
+        return False
+    return bool(re.search(r"\*\*Decided:\*\*\s*\d{4}-\d{2}-\d{2}", path.read_text(encoding="utf-8")))
+
+
+def plans_with_production(brain: Brain) -> list[str]:
+    """
+    List the plans that were decided.
+
+    :param brain: The brain
+    :returns: Plan slugs
+    """
+    folder = brain.file("plans")
+    if not folder.is_dir():
+        return []
+    return sorted(p.name for p in folder.iterdir() if p.is_dir() and not p.name.startswith("_") and is_decided(p))
 
 
 def check(brain: Brain) -> list[Finding]:
@@ -683,7 +745,9 @@ def check(brain: Brain) -> list[Finding]:
         add(Finding("error", STATE, 0, "missing: STATE.md is the one source of facts"))
     else:
         entries = parse_log(read_lines(brain.file(STATE)))
-        newest = max((e.date for e in entries), default=None)
+        for bad in (e for e in entries if not e.valid):
+            add(Finding("error", STATE, bad.line, f"log heading has a date that does not exist: {bad.date}"))
+        newest = max((e.date for e in entries if e.valid), default=None)
         if newest is None:
             add(Finding("warn", STATE, 0, "the log has no entries yet: add one with kea log"))
         elif (today - date.fromisoformat(newest)).days > stale:
@@ -715,7 +779,7 @@ def check(brain: Brain) -> list[Finding]:
         elif not d["revisit"] or d["revisit"] == "not set":
             add(Finding("warn", DECISIONS, 0, f"{d['id']} has no revisit date or trigger"))
     for p in predictions(brain):
-        if p["confidence"] is None or not 0 <= p["confidence"] <= 100:
+        if p["confidence"] is None:
             add(Finding("error", PREDICTIONS, 0, f"{p['id']} has no confidence from 0 to 100"))
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(p["by"])):
             add(Finding("error", PREDICTIONS, 0, f"{p['id']} has no resolution date"))
@@ -731,32 +795,6 @@ def check(brain: Brain) -> list[Finding]:
     order = {"error": 0, "warn": 1, "info": 2}
     found.sort(key=lambda f: (order.get(f.level, 3), f.file, f.line))
     return found
-
-
-def is_decided(plan: Path) -> bool:
-    """
-    Tell whether a plan was decided: its production plan carries a ``**Decided:**`` date, not just the template.
-
-    :param plan: The plan's folder
-    :returns: True once decided
-    """
-    path = plan / "20-production-plan.md"
-    if not path.is_file():
-        return False
-    return bool(re.search(r"\*\*Decided:\*\*\s*\d{4}-\d{2}-\d{2}", path.read_text(encoding="utf-8")))
-
-
-def plans_with_production(brain: Brain) -> list[str]:
-    """
-    List the plans that were decided.
-
-    :param brain: The brain
-    :returns: Plan slugs
-    """
-    folder = brain.file("plans")
-    if not folder.is_dir():
-        return []
-    return sorted(p.name for p in folder.iterdir() if p.is_dir() and not p.name.startswith("_") and is_decided(p))
 
 
 def _age_words(age: int | None) -> str:
@@ -798,11 +836,7 @@ def status(brain: Brain) -> dict[str, Any]:
     decided = plans_with_production(brain)
     short_plans = [p for p in decided if sum(1 for x in preds if x["plan"] and p in x["plan"]) < 3]
     health = [
-        {
-            "check": "STATE.md is fresh",
-            "ok": age is not None and age <= stale_after,
-            "detail": _age_words(age),
-        },
+        {"check": "STATE.md is fresh", "ok": age is not None and age <= stale_after, "detail": _age_words(age)},
         {
             "check": "facts are sourced and rechecked",
             "ok": not stale_facts,
@@ -840,6 +874,7 @@ def status(brain: Brain) -> dict[str, Any]:
             "facts": len(now_state["facts"]),
             "stale_facts": len(stale_facts),
             "unverified": now_state["unverified"],
+            "bad_dates": now_state["bad_dates"],
         },
         "decisions": {
             "active": len(active),

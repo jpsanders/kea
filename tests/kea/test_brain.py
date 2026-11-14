@@ -13,10 +13,12 @@ def test_init_writes_the_templates_with_values(tmp_path: Path) -> None:
     brain = Brain.load(tmp_path / "b")
     assert brain.name == "Mine" and brain.owner == "Ada"
     assert "Waiting for Ada" in brain.file("ROADMAP.md").read_text()
-    assert "{{" not in "".join(p.read_text() for p in (tmp_path / "b").rglob("*.md"))
+    text = "".join(p.read_text() for p in (tmp_path / "b").rglob("*.md"))
+    assert "{{" not in text.replace("{{plan_date}}", "")
     assert (tmp_path / "b" / ".kea").is_dir()
+    assert init(tmp_path / "b", git=False) == []
     with pytest.raises(BrainError):
-        init(tmp_path / "b", git=False)
+        init(Path.home(), git=False)
 
 
 def test_init_keeps_existing_files_unless_forced(tmp_path: Path) -> None:
@@ -37,7 +39,7 @@ def test_init_runs_git_when_asked(tmp_path: Path) -> None:
 def test_example_has_no_placeholders_and_relative_dates(tmp_path: Path) -> None:
     init(tmp_path / "e", example=True, git=False)
     text = "".join(p.read_text() for p in (tmp_path / "e").rglob("*.md"))
-    assert "{{" not in text and "Tidewater" in text and "2026-11-12" in text
+    assert "{{" not in text.replace("{{plan_date}}", "") and "Tidewater" in text and "2026-11-12" in text
 
 
 def test_locate_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,8 +62,9 @@ def test_locate_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_default_brain_config_keeps_other_lines(tmp_path: Path) -> None:
+    init(tmp_path, git=False)
     config = brain_mod.user_config_path()
-    config.parent.mkdir(parents=True)
+    config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text('brain = "/old"\n[extra]\nkey = 1\n')
     brain_mod.set_default_brain(tmp_path)
     text = config.read_text()

@@ -1,9 +1,11 @@
 """
 Read evidence into the index: AI agent sessions, chat exports, git history, documents, and the brain itself.
 
-Every adapter is read only and incremental. A source whose fingerprint (size and modification time, or the git refs)
-has not changed is skipped, so a second run takes a moment. Paths that name a credential store are never opened, and
-every text passes through :func:`kea.redact.redact` before it is stored.
+Every adapter is read only and incremental. A source whose fingerprint (size and modification time, or the git refs,
+together with the brain's deny and identity settings) has not changed is skipped, so a second run takes a moment.
+Paths that name a credential store are never opened, symbolic links are judged by where they point, a forgotten source
+is never read back, and :class:`kea.store.Store` redacts every text before it is stored. A malformed record is skipped
+and counted; a malformed file is reported, and the rest of the run carries on.
 """
 
 import hashlib
@@ -21,7 +23,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from kea.brain import INDEX_DIR, Brain
-from kea.redact import is_denied, redact
+from kea.redact import is_denied
 from kea.store import Item, Store
 
 TEXT_SUFFIXES = {".md", ".markdown", ".txt", ".rst", ".org"}
@@ -43,6 +45,15 @@ SKIP_DIRS = {
     "dist",
     "build",
 }
+# kea's own boilerplate in a brain: searchable in the manual, never mistaken for what the owner wrote.
+BRAIN_BOILERPLATE = {
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "council/PROTOCOL.md",
+    "frameworks/_TEMPLATE.md",
+    "journal/README.md",
+}
 # Text Claude Code and Codex inject into the user turn; it is not what the person typed.
 WRAPPER = re.compile(
     r"<(system-reminder|local-command-caveat|local-command-stdout|local-command-stderr|command-name|command-message|"
@@ -51,6 +62,7 @@ WRAPPER = re.compile(
 )
 NOISE = {"[Request interrupted by user]", "[Request interrupted by user for tool use]"}
 KINDS = ("claude-code", "codex", "opencode", "chatgpt", "claude", "git", "docs")
+BAD_RECORD = (AttributeError, KeyError, TypeError, ValueError, OverflowError, IndexError)
 
 
 @dataclass
@@ -64,6 +76,7 @@ class Report:
     skipped: int = 0
     dropped: int = 0
     items: int = 0
+    bad_records: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -106,9 +119,12 @@ def fingerprint(path: Path) -> str:
 def _iso(value: Any) -> str | None:
     if value in (None, ""):
         return None
-    if isinstance(value, (int, float)):
-        seconds = value / 1000 if value > 10_000_000_000 else value
-        return datetime.fromtimestamp(seconds, UTC).isoformat(timespec="seconds")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            seconds = value / 1000 if value > 10_000_000_000 else value
+            return datetime.fromtimestamp(seconds, UTC).isoformat(timespec="seconds")
+        except OverflowError, OSError, ValueError:
+            return None
     return str(value)
 
 
@@ -129,6 +145,21 @@ def _identity(brain: Brain) -> tuple[set[str], set[str]]:
             if out:
                 bucket.add(out.lower())
     return emails, names
+
+
+def _signature(brain: Brain) -> str:
+    """Fold the settings that change what is stored into every fingerprint, so changing them rereads the sources."""
+    emails, names = _identity(brain)
+    raw = json.dumps([sorted(_deny(brain)), sorted(emails), sorted(names)])
+    return hashlib.sha256(raw.encode()).hexdigest()[:10]
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def _texts(content: Any, types: tuple[str, ...] = ("text",)) -> str:
@@ -152,10 +183,30 @@ def _title(items: list[Item], fallback: str) -> str:
     return (line[:77] + "...") if len(line) > 80 else (line or fallback)
 
 
+def _jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line_no, line in enumerate(fh, 1):
+            try:
+                record = json.loads(line)
+            except ValueError, RecursionError:
+                continue
+            if isinstance(record, dict):
+                yield line_no, record
+
+
 # ---------------------------------------------------------------- AI agent sessions
 
 
-def parse_claude_code(path: Path) -> tuple[list[Item], str | None]:
+@dataclass
+class Parsed:
+    """What a session parser found."""
+
+    items: list[Item]
+    project: str | None
+    bad: int = 0
+
+
+def parse_claude_code(path: Path) -> Parsed:
     """
     Read one Claude Code session transcript: the person's prompts and the assistant's replies, nothing else.
 
@@ -164,51 +215,52 @@ def parse_claude_code(path: Path) -> tuple[list[Item], str | None]:
     :param path: A ``<session>.jsonl`` file under ``~/.claude/projects``
     :returns: The messages, and the project folder the session ran in
     """
-    items: list[Item] = []
-    cwd = title = None
+    out = Parsed([], None)
+    title = None
     session = path.stem
-    with path.open(encoding="utf-8", errors="replace") as fh:
-        for line_no, line in enumerate(fh, 1):
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(d, dict):
-                continue
+    for line_no, d in _jsonl(path):
+        try:
             kind = d.get("type")
             if kind in ("ai-title", "custom-title"):
-                title = d.get("aiTitle") or d.get("customTitle") or d.get("title") or title
+                found = d.get("aiTitle") or d.get("customTitle") or d.get("title")
+                title = str(found) if found else title
                 continue
-            if kind not in ("user", "assistant") or d.get("isSidechain") or d.get("isMeta"):
+            if (
+                kind not in ("user", "assistant")
+                or d.get("isSidechain")
+                or d.get("isMeta")
+                or d.get("isCompactSummary")
+            ):
                 continue
-            if d.get("isCompactSummary"):
-                continue
-            cwd = cwd or d.get("cwd")
-            message = d.get("message") or {}
+            if isinstance(d.get("cwd"), str) and not out.project:
+                out.project = d["cwd"]
+            message = d.get("message")
             content = message.get("content") if isinstance(message, dict) else None
             text = _prompt(_texts(content)) if kind == "user" else _texts(content).strip()
             if not text:
                 continue
-            items.append(
+            out.items.append(
                 Item(
                     "message",
                     "claude-code",
-                    cwd,
+                    None,
                     session,
                     None,
-                    len(items),
+                    len(out.items),
                     kind,
                     None,
                     kind == "user",
                     _iso(d.get("timestamp")),
                     f"{path}:{line_no}",
-                    redact(text),
+                    text,
                 )
             )
-    name = title or _title(items, session)
-    for item in items:
-        item.title, item.project = name, cwd
-    return items, cwd
+        except BAD_RECORD:
+            out.bad += 1
+    name = title or _title(out.items, session)
+    for item in out.items:
+        item.title, item.project = name, out.project
+    return out
 
 
 def _codex_wrapper(text: str) -> bool:
@@ -219,28 +271,21 @@ def _codex_wrapper(text: str) -> bool:
     return stripped.startswith("# AGENTS.md instructions")
 
 
-def parse_codex(path: Path) -> tuple[list[Item], str | None]:
+def parse_codex(path: Path) -> Parsed:
     """
     Read one Codex CLI rollout: the person's prompts and the assistant's replies.
 
     :param path: A ``rollout-*.jsonl`` file under ``~/.codex/sessions``
     :returns: The messages, and the project folder the session ran in
     """
-    items: list[Item] = []
-    cwd = None
+    out = Parsed([], None)
     session = path.stem.removeprefix("rollout-")
-    with path.open(encoding="utf-8", errors="replace") as fh:
-        for line_no, line in enumerate(fh, 1):
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(d, dict):
-                continue
+    for line_no, d in _jsonl(path):
+        try:
             raw = d.get("payload")
             payload: dict[str, Any] = raw if isinstance(raw, dict) else {}
             if d.get("type") == "session_meta":
-                cwd = payload.get("cwd") or cwd
+                out.project = payload["cwd"] if isinstance(payload.get("cwd"), str) else out.project
                 session = str(payload.get("id") or session)
                 continue
             if d.get("type") != "response_item" or payload.get("type") != "message":
@@ -251,26 +296,28 @@ def parse_codex(path: Path) -> tuple[list[Item], str | None]:
             text = _texts(payload.get("content"), ("input_text", "output_text", "text")).strip()
             if not text or (role == "user" and _codex_wrapper(text)):
                 continue
-            items.append(
+            out.items.append(
                 Item(
                     "message",
                     "codex",
-                    cwd,
+                    None,
                     session,
                     None,
-                    len(items),
-                    role,
+                    len(out.items),
+                    str(role),
                     None,
                     role == "user",
                     _iso(d.get("timestamp")),
                     f"{path}:{line_no}",
-                    redact(text),
+                    text,
                 )
             )
-    name = _title(items, session)
-    for item in items:
-        item.title, item.project = name, cwd
-    return items, cwd
+        except BAD_RECORD:
+            out.bad += 1
+    name = _title(out.items, session)
+    for item in out.items:
+        item.title, item.project = name, out.project
+    return out
 
 
 def _sessions(
@@ -278,18 +325,19 @@ def _sessions(
     report: Report,
     kind: str,
     files: list[Path],
-    parse: Callable[[Path], tuple[list[Item], str | None]],
+    parse: Callable[[Path], Parsed],
     deny: list[str],
+    sig: str,
     force: bool,
 ) -> set[str]:
     seen: set[str] = set()
     for path in files:
-        if is_denied(path, deny):
+        if is_denied(path, deny) or store.is_forgotten(kind, str(path)):
             report.skipped += 1
             continue
         seen.add(str(path))
         try:
-            mark = fingerprint(path)
+            mark = f"{fingerprint(path)}|{sig}"
         except OSError:
             continue
         sid, old = store.source(kind, str(path))
@@ -297,25 +345,26 @@ def _sessions(
             report.unchanged += 1
             continue
         try:
-            items, cwd = parse(path)
-        except OSError as exc:
+            parsed = parse(path)
+        except (OSError, *BAD_RECORD) as exc:
             store.fail(sid, str(exc))
             report.errors.append(f"{path}: {exc}")
             continue
+        report.bad_records += parsed.bad
         with store.transaction():
-            if cwd and is_denied(cwd, deny):
+            if parsed.project and is_denied(parsed.project, deny):
                 store.replace(sid, [], mark)
                 report.skipped += 1
                 continue
-            store.source(kind, str(path), cwd)
-            report.items += store.replace(sid, items, mark)
+            store.source(kind, str(path), parsed.project)
+            report.items += store.replace(sid, parsed.items, mark)
         report.read += 1
     return seen
 
 
-def _opencode(store: Store, report: Report, db: Path, force: bool) -> None:
+def _opencode(store: Store, report: Report, db: Path, sig: str, force: bool) -> None:
     wal = db.with_name(db.name + "-wal")
-    mark = fingerprint(db) + (f"+{fingerprint(wal)}" if wal.exists() else "")
+    mark = fingerprint(db) + (f"+{fingerprint(wal)}" if wal.exists() else "") + f"|{sig}"
     sid, old = store.source("opencode", str(db), "OpenCode")
     if old == mark and not force:
         report.unchanged += 1
@@ -334,7 +383,8 @@ def _opencode(store: Store, report: Report, db: Path, force: bool) -> None:
         for row in src.execute("SELECT message_id, data FROM part ORDER BY time_created"):
             try:
                 data = json.loads(row["data"])
-            except ValueError:
+            except ValueError, TypeError, RecursionError:
+                report.bad_records += 1
                 continue
             if isinstance(data, dict) and data.get("type") == "text" and data.get("text"):
                 parts.setdefault(row["message_id"], []).append(str(data["text"]))
@@ -344,8 +394,9 @@ def _opencode(store: Store, report: Report, db: Path, force: bool) -> None:
             if not text:
                 continue
             try:
-                role = json.loads(row["data"]).get("role", "assistant")
-            except ValueError, AttributeError:
+                meta = json.loads(row["data"])
+                role = str(meta.get("role", "assistant")) if isinstance(meta, dict) else "assistant"
+            except ValueError, TypeError, RecursionError:
                 role = "assistant"
             session = sessions.get(row["session_id"])
             n = seq.get(row["session_id"], 0)
@@ -354,16 +405,16 @@ def _opencode(store: Store, report: Report, db: Path, force: bool) -> None:
                 Item(
                     "message",
                     "opencode",
-                    session["directory"] if session else None,
-                    row["session_id"],
-                    session["title"] if session else None,
+                    str(session["directory"]) if session and session["directory"] else None,
+                    str(row["session_id"]),
+                    str(session["title"]) if session and session["title"] else None,
                     n,
                     role,
                     None,
                     role == "user",
                     _iso(row["time_created"]),
                     f"{db}#session/{row['session_id']}/message/{row['id']}",
-                    redact(text),
+                    text,
                 )
             )
     except sqlite3.Error as exc:
@@ -398,136 +449,164 @@ def _export_files(path: Path, pattern: str) -> Iterator[tuple[str, IO[bytes]]]:
             yield path.name, fh
 
 
-def parse_chatgpt(path: Path) -> list[Item]:
+def _load(fh: IO[bytes]) -> Any:
+    try:
+        return json.load(fh)
+    except ValueError, RecursionError:
+        return None
+
+
+def parse_chatgpt(path: Path) -> Parsed:
     """
     Read a ChatGPT data export: each conversation along the branch that was kept.
 
     :param path: The export zip, its unpacked folder, or ``conversations.json``
     :returns: The messages
     """
-    items: list[Item] = []
+    out = Parsed([], None)
     for member, fh in _export_files(path, r"^conversations(-\d+)?\.json$"):
-        data = json.load(fh)
+        data = _load(fh)
         for conv in data if isinstance(data, list) else []:
             if not isinstance(conv, dict):
+                out.bad += 1
                 continue
-            cid = str(conv.get("conversation_id") or conv.get("id") or "")
-            mapping = conv.get("mapping") or {}
-            chain, node, seen = [], conv.get("current_node"), set()
-            while node and node in mapping and node not in seen:
-                seen.add(node)
-                chain.append((node, (mapping[node] or {}).get("message")))
-                node = (mapping[node] or {}).get("parent")
-            chain.reverse()
-            seq = 0
-            for node_id, msg in chain:
-                if not isinstance(msg, dict):
-                    continue
-                role = (msg.get("author") or {}).get("role")
-                if role not in ("user", "assistant"):
-                    continue
-                parts = (msg.get("content") or {}).get("parts") or []
-                text = "\n\n".join(p if isinstance(p, str) else str(p.get("text", "")) for p in parts if p).strip()
-                if not text:
-                    continue
-                items.append(
-                    Item(
-                        "message",
-                        "chatgpt",
-                        None,
-                        cid,
-                        conv.get("title") or "untitled",
-                        seq,
-                        role,
-                        None,
-                        role == "user",
-                        _iso(msg.get("create_time") or conv.get("create_time")),
-                        f"{path}#{member}/{cid}/{node_id}",
-                        redact(text),
+            try:
+                cid = str(conv.get("conversation_id") or conv.get("id") or "")
+                mapping = _dict(conv.get("mapping"))
+                chain: list[tuple[str, Any]] = []
+                node, seen = conv.get("current_node"), set()
+                while isinstance(node, str) and node in mapping and node not in seen:
+                    seen.add(node)
+                    record = _dict(mapping[node])
+                    chain.append((node, record.get("message")))
+                    node = record.get("parent")
+                chain.reverse()
+                seq = 0
+                for node_id, msg in chain:
+                    if not isinstance(msg, dict) or not isinstance(msg.get("author"), dict):
+                        continue
+                    role = msg["author"].get("role")
+                    parts = _list(_dict(msg.get("content")).get("parts"))
+                    text = "\n\n".join(
+                        p if isinstance(p, str) else str(p.get("text", "")) if isinstance(p, dict) else ""
+                        for p in parts
+                    ).strip()
+                    if role not in ("user", "assistant") or not text:
+                        continue
+                    out.items.append(
+                        Item(
+                            "message",
+                            "chatgpt",
+                            None,
+                            cid,
+                            str(conv.get("title") or "untitled"),
+                            seq,
+                            str(role),
+                            None,
+                            role == "user",
+                            _iso(msg.get("create_time") or conv.get("create_time")),
+                            f"{path}#{member}/{cid}/{node_id}",
+                            text,
+                        )
                     )
-                )
-                seq += 1
-    return items
+                    seq += 1
+            except BAD_RECORD:
+                out.bad += 1
+    return out
 
 
-def parse_claude_export(path: Path) -> list[Item]:
+def parse_claude_export(path: Path) -> Parsed:
     """
     Read a Claude.ai data export: conversations, and the documents kept in projects.
 
     :param path: The export zip, its unpacked folder, or ``conversations.json``
     :returns: The messages and project documents
     """
-    items: list[Item] = []
+    out = Parsed([], None)
     for member, fh in _export_files(path, r"^conversations\.json$"):
-        data = json.load(fh)
+        data = _load(fh)
         for conv in data if isinstance(data, list) else []:
             if not isinstance(conv, dict):
+                out.bad += 1
                 continue
-            cid = str(conv.get("uuid") or "")
-            for seq, msg in enumerate(conv.get("chat_messages") or []):
-                if not isinstance(msg, dict):
-                    continue
-                role = {"human": "user", "assistant": "assistant"}.get(str(msg.get("sender")), "user")
-                text = (_texts(msg.get("content")) or str(msg.get("text") or "")).strip()
-                if text:
-                    items.append(
-                        Item(
-                            "message",
-                            "claude",
-                            None,
-                            cid,
-                            conv.get("name") or "untitled",
-                            seq,
-                            role,
-                            None,
-                            role == "user",
-                            _iso(msg.get("created_at")),
-                            f"{path}#{member}/{cid}/{seq}",
-                            redact(text),
+            try:
+                cid = str(conv.get("uuid") or "")
+                messages = _list(conv.get("chat_messages"))
+                for seq, msg in enumerate(messages):
+                    if not isinstance(msg, dict):
+                        continue
+                    role = {"human": "user", "assistant": "assistant"}.get(str(msg.get("sender")), "user")
+                    text = (_texts(msg.get("content")) or str(msg.get("text") or "")).strip()
+                    if text:
+                        out.items.append(
+                            Item(
+                                "message",
+                                "claude",
+                                None,
+                                cid,
+                                str(conv.get("name") or "untitled"),
+                                seq,
+                                role,
+                                None,
+                                role == "user",
+                                _iso(msg.get("created_at")),
+                                f"{path}#{member}/{cid}/{seq}",
+                                text,
+                            )
                         )
-                    )
+            except BAD_RECORD:
+                out.bad += 1
     for member, fh in _export_files(path, r"^projects\.json$|^[0-9a-f-]{36}\.json$"):
-        data = json.load(fh)
+        data = _load(fh)
         projects = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
         for project in projects:
-            if not isinstance(project, dict) or "docs" not in project:
-                continue
-            for seq, doc in enumerate(project.get("docs") or []):
-                text = str((doc or {}).get("content") or "").strip()
-                if text:
-                    items.append(
-                        Item(
-                            "doc",
-                            "claude",
-                            project.get("name"),
-                            str(project.get("uuid") or ""),
-                            str(doc.get("filename") or "document"),
-                            seq,
-                            None,
-                            None,
-                            False,
-                            _iso(doc.get("created_at")),
-                            f"{path}#{member}/{doc.get('uuid', seq)}",
-                            redact(text),
+            try:
+                if not isinstance(project, dict) or not isinstance(project.get("docs"), list):
+                    continue
+                for seq, doc in enumerate(project["docs"]):
+                    if not isinstance(doc, dict):
+                        continue
+                    text = str(doc.get("content") or "").strip()
+                    if text:
+                        out.items.append(
+                            Item(
+                                "doc",
+                                "claude",
+                                str(project.get("name") or "") or None,
+                                str(project.get("uuid") or ""),
+                                str(doc.get("filename") or "document"),
+                                seq,
+                                None,
+                                None,
+                                False,
+                                _iso(doc.get("created_at")),
+                                f"{path}#{member}/{doc.get('uuid', seq)}",
+                                text,
+                            )
                         )
-                    )
-    return items
+            except BAD_RECORD:
+                out.bad += 1
+    return out
 
 
-def _export(store: Store, report: Report, kind: str, path: Path, force: bool) -> None:
-    mark = fingerprint(path) if path.is_file() else _tree_mark(path)
+def _export(store: Store, report: Report, kind: str, path: Path, sig: str, force: bool) -> None:
+    if store.is_forgotten(kind, str(path)):
+        report.skipped += 1
+        return
+    mark = (fingerprint(path) if path.is_file() else _tree_mark(path)) + f"|{sig}"
     sid, old = store.source(kind, str(path), path.name)
     if old == mark and not force:
         report.unchanged += 1
         return
     try:
-        items = parse_chatgpt(path) if kind == "chatgpt" else parse_claude_export(path)
-    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        parsed = parse_chatgpt(path) if kind == "chatgpt" else parse_claude_export(path)
+    except (OSError, zipfile.BadZipFile, *BAD_RECORD) as exc:
         store.fail(sid, str(exc))
         report.errors.append(f"{path}: {exc}")
         return
+    report.bad_records += parsed.bad
     with store.transaction():
-        report.items += store.replace(sid, items, mark)
+        report.items += store.replace(sid, parsed.items, mark)
     report.read += 1
 
 
@@ -568,6 +647,9 @@ def parse_git(repo: Path, emails: set[str], names: set[str]) -> list[Item]:
     """
     Read a repository's history: every commit on every branch, with its files.
 
+    Every commit prints exactly seven NUL bytes, one before each field and one after the body, and git never allows a
+    NUL inside a commit, so the output splits into groups of seven fields whatever the messages hold.
+
     :param repo: The repository root
     :param emails: Your author emails, lowercase
     :param names: Your author names, lowercase
@@ -577,7 +659,7 @@ def parse_git(repo: Path, emails: set[str], names: set[str]) -> list[Item]:
     git = shutil.which("git")
     if not git:
         raise OSError("git is not installed")
-    fmt = "%x1e%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b%x1d"
+    fmt = "%x00%H%x00%an%x00%ae%x00%aI%x00%s%x00%b%x00"
     proc = subprocess.run(  # nosec B603: git log, fixed arguments, the repo path as a separate argument
         [git, "-C", str(repo), "log", "--all", "--no-color", "--name-only", f"--format={fmt}"],
         capture_output=True,
@@ -588,14 +670,9 @@ def parse_git(repo: Path, emails: set[str], names: set[str]) -> list[Item]:
     if proc.returncode != 0:
         raise OSError(proc.stderr.strip()[:300] or f"git log failed in {repo}")
     commits = []
-    for chunk in proc.stdout.split("\x1e"):
-        if "\x1d" not in chunk:
-            continue
-        head, files_text = chunk.split("\x1d", 1)
-        fields = head.split("\x1f")
-        if len(fields) < 6:
-            continue
-        sha, name, email, when, subject, body = fields[:6]
+    tokens = proc.stdout.split("\x00")[1:]
+    for i in range(0, len(tokens) - 6, 7):
+        sha, name, email, when, subject, body, files_text = tokens[i : i + 7]
         files = [f for f in files_text.split("\n") if f.strip()]
         mine = email.lower() in emails or name.lower() in names
         text = subject + ("\n\n" + body.strip() if body.strip() else "")
@@ -616,7 +693,7 @@ def parse_git(repo: Path, emails: set[str], names: set[str]) -> list[Item]:
             mine,
             when,
             f"{repo}@{sha[:12]}",
-            redact(text),
+            text,
         )
         for seq, (when, sha, name, email, subject, text, mine) in enumerate(commits)
     ]
@@ -630,15 +707,15 @@ def _git_mark(repo: Path) -> str:
     return hashlib.sha256(refs.encode()).hexdigest()[:24]
 
 
-def _git(brain: Brain, store: Store, report: Report, path: Path, deny: list[str], force: bool) -> None:
+def _git(brain: Brain, store: Store, report: Report, path: Path, deny: list[str], sig: str, force: bool) -> None:
     emails, names = _identity(brain)
     seen = set()
     for repo in find_repos(path):
-        if is_denied(repo, deny):
+        if is_denied(repo.resolve(), deny) or store.is_forgotten("git", str(repo)):
             report.skipped += 1
             continue
         seen.add(str(repo))
-        mark = _git_mark(repo)
+        mark = f"{_git_mark(repo)}|{sig}"
         sid, old = store.source("git", str(repo), repo.name)
         if old == mark and not force:
             report.unchanged += 1
@@ -669,7 +746,7 @@ def sections(path: Path, platform: str, ref_base: str, project: str | None) -> l
     :param project: The folder it belongs to
     :returns: The sections, each pointing at its first line
     """
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
     markdown = path.suffix.lower() in (".md", ".markdown")
     kind = "note" if platform == "brain" else "doc"
     pieces: list[tuple[int, str, list[str]]] = []
@@ -700,21 +777,36 @@ def sections(path: Path, platform: str, ref_base: str, project: str | None) -> l
             seq,
             None,
             None,
-            platform == "brain",
+            False,
             None,
             f"{ref_base}:{line}",
-            redact("\n".join(body).strip()),
+            "\n".join(body).strip(),
         )
         for seq, (line, title, body) in enumerate(pieces)
     ]
 
 
+def _readable(path: Path, root: Path, deny: list[str]) -> bool:
+    """Tell whether kea may read a text file: right suffix, not hidden or too big, not denied, not linked outside."""
+    if path.name.startswith(".") or path.suffix.lower() not in TEXT_SUFFIXES:
+        return False
+    try:
+        target = path.resolve(strict=True)
+        if target.stat().st_size > MAX_DOC_BYTES:
+            return False
+    except OSError:
+        return False
+    if is_denied(path, deny) or is_denied(target, deny):
+        return False
+    return not path.is_symlink() or target.is_relative_to(root.resolve())
+
+
 def text_files(folder: Path, deny: list[str], skip: tuple[Path, ...] = ()) -> list[Path]:
     """
-    List the text files under a folder, leaving out hidden, build and denied paths.
+    List the text files under a folder, leaving out hidden, build and denied paths, and links that point outside it.
 
     :param folder: Where to look
-    :param deny: Extra path segments to leave out
+    :param deny: Extra path patterns to leave out
     :param skip: Folders to leave out entirely
     :returns: The files
     """
@@ -722,28 +814,30 @@ def text_files(folder: Path, deny: list[str], skip: tuple[Path, ...] = ()) -> li
     for root, dirs, files in os.walk(folder):
         here = Path(root)
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS and (here / d) not in skip)
-        for name in sorted(files):
-            path = here / name
-            if name.startswith(".") or path.suffix.lower() not in TEXT_SUFFIXES or is_denied(path, deny):
-                continue
-            try:
-                if path.stat().st_size <= MAX_DOC_BYTES:
-                    out.append(path)
-            except OSError:
-                continue
+        out += [here / name for name in sorted(files) if _readable(here / name, folder, deny)]
     return out
 
 
 def _docs(
-    store: Store, report: Report, folder: Path, deny: list[str], force: bool, platform: str, base: Path | None
+    store: Store, report: Report, folder: Path, deny: list[str], sig: str, force: bool, platform: str, base: Path | None
 ) -> None:
-    skip = (folder / INDEX_DIR, folder / "council" / "briefing") if platform == "brain" else ()
-    files = [folder] if folder.is_file() else text_files(folder, deny, skip)
+    if folder.is_file():
+        if not _readable(folder, folder.parent, deny):
+            raise ValueError(f"refused: {folder} is not a readable text file (.md, .txt, .rst, .org, not hidden)")
+        files = [folder]
+    elif platform == "brain":
+        skip = (folder / INDEX_DIR, folder / "council" / "briefing", folder / "plans" / "_template")
+        files = [p for p in text_files(folder, deny, skip) if str(p.relative_to(folder)) not in BRAIN_BOILERPLATE]
+    else:
+        files = text_files(folder, deny)
     kind = "brain" if platform == "brain" else "docs"
     seen = set()
     for path in files:
+        if store.is_forgotten(kind, str(path)):
+            report.skipped += 1
+            continue
         seen.add(str(path))
-        mark = fingerprint(path)
+        mark = f"{fingerprint(path)}|{sig}"
         sid, old = store.source(kind, str(path), (base or folder).name)
         if old == mark and not force:
             report.unchanged += 1
@@ -766,65 +860,77 @@ def refresh_brain(brain: Brain, store: Store, force: bool = False) -> Report:
     """
     Index the brain's own Markdown, so search covers STATE.md, decisions, plans and notes. Cheap when nothing changed.
 
+    kea's own boilerplate (AGENTS.md, the templates, the protocol) is left out.
+
     :param brain: The brain
     :param store: Its index
     :param force: Read every file again
     :returns: The report
     """
     report = Report("brain", str(brain.root))
-    _docs(store, report, brain.root, _deny(brain), force, "brain", brain.root)
+    _docs(store, report, brain.root, _deny(brain), _signature(brain), force, "brain", brain.root)
     return report
 
 
-def ingest(brain: Brain, store: Store, kind: str, path: str | None = None, force: bool = False) -> Report:
+def ingest(
+    brain: Brain, store: Store, kind: str, path: str | None = None, force: bool = False, revive: bool = True
+) -> Report:
     """
     Read one source into the index and remember it, so ``kea ingest`` alone scans it again.
+
+    Naming the exact path of a source that was forgotten brings it back.
 
     :param brain: The brain
     :param store: Its index
     :param kind: One of claude-code, codex, opencode, chatgpt, claude, git, docs
     :param path: What to read; the adapter's default location when omitted
     :param force: Read everything again, even what has not changed
+    :param revive: Bring the named path back if it was forgotten; a rescan of known roots passes False
     :returns: The report
-    :raises ValueError: When the kind is unknown or the path is missing
+    :raises ValueError: When the kind is unknown, the path is missing, or the path is refused
     """
     if kind not in KINDS:
         raise ValueError(f"unknown source {kind!r}; choose from {', '.join(KINDS)}")
     target = Path(path).expanduser() if path else default_path(kind)
     if target is None:
         raise ValueError(f"{kind} needs a path: kea ingest {kind} <path>")
-    target = target.resolve()
-    report = Report(kind, str(target))
-    if not target.exists():
-        raise ValueError(f"not found: {target}")
     deny = _deny(brain)
     if is_denied(target, deny):
         raise ValueError(f"refused: {target} names a credential store")
+    target = target.resolve()
+    if not target.exists():
+        raise ValueError(f"not found: {target}")
+    if is_denied(target, deny):
+        raise ValueError(f"refused: {target} names a credential store")
+    if path and revive:
+        store.remember(kind, str(target))
+    report = Report(kind, str(target))
+    sig = _signature(brain)
     if kind == "claude-code":
         files = [target] if target.is_file() else sorted(target.glob("*/*.jsonl"))
-        seen = _sessions(store, report, kind, files, parse_claude_code, deny, force)
+        seen = _sessions(store, report, kind, files, parse_claude_code, deny, sig, force)
         if target.is_dir():
             report.dropped = store.drop_missing(kind, seen, str(target))
     elif kind == "codex":
         files = [target] if target.is_file() else sorted(target.rglob("rollout-*.jsonl"))
-        seen = _sessions(store, report, kind, files, parse_codex, deny, force)
+        seen = _sessions(store, report, kind, files, parse_codex, deny, sig, force)
         if target.is_dir():
             report.dropped = store.drop_missing(kind, seen, str(target))
     elif kind == "opencode":
-        _opencode(store, report, target, force)
+        _opencode(store, report, target, sig, force)
     elif kind in ("chatgpt", "claude"):
-        _export(store, report, kind, target, force)
+        _export(store, report, kind, target, sig, force)
     elif kind == "git":
-        _git(brain, store, report, target, deny, force)
+        _git(brain, store, report, target, deny, sig, force)
     else:
-        _docs(store, report, target, deny, force, "docs", None)
+        _docs(store, report, target, deny, sig, force, "docs", None)
     store.add_root(kind, str(target))
     return report
 
 
 def ingest_known(brain: Brain, store: Store, force: bool = False) -> list[Report]:
     """
-    Scan the brain and every source ingested before, again.
+    Scan the brain and every source ingested before, again. One broken source never stops the others.
 
     :param brain: The brain
     :param store: Its index
@@ -834,7 +940,7 @@ def ingest_known(brain: Brain, store: Store, force: bool = False) -> list[Report
     reports = [refresh_brain(brain, store, force)]
     for kind, path in store.roots():
         try:
-            reports.append(ingest(brain, store, kind, path, force))
-        except ValueError as exc:
-            reports.append(Report(kind, path, errors=[str(exc)]))
+            reports.append(ingest(brain, store, kind, path, force, revive=False))
+        except Exception as exc:  # noqa: BLE001  one broken root must not stop the rescan of the others
+            reports.append(Report(kind, path, errors=[f"{type(exc).__name__}: {exc}"]))
     return reports

@@ -23,10 +23,10 @@ kea is one Python package with no dependencies beyond the standard library. It r
 .SH QUICK START
 .RS 4
 .nf
-uv tool install git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 when you lack it
+uv tool install \-\-python 3.15 git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 if missing
 kea init ~/brain                                        # make a brain; it becomes your default
 cd ~/brain && kea status                                # the whole brain at a glance
-kea skill install                                       # teach Claude Code, Codex and OpenCode to use it
+kea skill install                                       # teach Claude Code, Codex and OpenCode
 kea ingest claude\-code                                  # make your past agent sessions searchable
 kea search "what did we decide about pricing"
 .fi
@@ -110,11 +110,11 @@ every seat missed.
 \fBAsk, do not assume.\fR Questions only the owner can answer go on the roadmap under waiting.
 .SH COMMANDS
 .PP
-Every command that prints data takes \fB\-\-json\fR and prints one JSON document with stable fields. \fB\-\-brain PATH\fR before the command picks the brain. Dates accept \fB2026\-12\-01\fR, \fBtoday\fR, \fBtomorrow\fR, or an offset such as \fB+30d\fR, \fB+6w\fR or \fB+3m\fR.
+Every command that prints data takes \fB\-\-json\fR and prints one JSON document with stable fields. \fB\-\-brain PATH\fR before the command picks the brain. Dates accept \fB2026\-12\-01\fR, \fBtoday\fR, \fBtomorrow\fR, or an offset such as \fB+30d\fR, \fB+6w\fR, \fB+3m\fR or, for \fB\-\-since\fR, \fB\-30d\fR.
 .SS Start and look
 .TP
 kea init [PATH]
-Make a brain; --name, --owner, --example, --force, --no-git, --default, --no-default
+Make a brain, or put back a brain's missing files; --example, --force (backs up first), --default
 .TP
 kea status
 The whole brain: freshness, due decisions and predictions, roadmap, plans, seats, evidence, health
@@ -182,13 +182,13 @@ kea sources
 What the index was read from, with errors
 .TP
 kea forget ID
-Delete a source and everything read from it; --kind KIND for every source of one kind
+Delete a source and what was read from it; later scans skip it; --kind KIND for a whole kind
 .TP
 kea effort
 Your own prompts to AI agents per project: where attention went; --months, --since
 .TP
 kea digest [TRANSCRIPT]
-A Claude Code session as digest.md, prompts.md, turns.md and meta.json; -o DIR, --tz
+A Claude Code session as private readable files in the brain's digests/; -o DIR, --tz
 .SS Plans and the council
 .TP
 kea plan new SLUG
@@ -207,14 +207,14 @@ kea synth SLUG
 The synthesis scaffold: verdicts, convergence, splits, solo insights
 .TP
 kea seats
-The seats and whether each can run; --probe asks each to answer
+The seats, their hosts, whether each can run; --probe asks each to answer (--yes for custom hosts)
 .SS Agents and docs
 .TP
 kea mcp
 Serve the brain to agents over the Model Context Protocol on stdio
 .TP
 kea skill install
-Copy kea's skills into every agent found; --agent claude, codex, opencode or agents; --dry-run
+Copy kea's skills where agents read them; --agent claude, agents, codex or opencode; --dry-run
 .TP
 kea skill show [NAME]
 Print a skill, for agents without a skills folder
@@ -304,7 +304,7 @@ none: they run on this machine
 .PP
 Any other OpenAI compatible server works with \fBbase_url\fR and \fBkey_env\fR. Calls to one provider are spaced by the roster's \fB[rate_limits]\fR. Keys travel only in headers, never in a URL, and never over plain HTTP to another machine.
 .PP
-The packet holds the files in \fB[brief] include\fR and the plan. Free tiers may keep or train on what they receive, so \fBkea council\fR asks before it sends anything off the machine; \fB\-\-yes\fR skips the question and \fB\-\-dry\-run\fR shows what would go where.
+The packet holds the files in \fB[brief] include\fR (only files inside the brain) and the plan, with anything shaped like a key replaced by [REDACTED]. Free tiers may keep or train on what they receive, so \fBkea council\fR asks before it sends anything off the machine, naming every host; \fB\-\-yes\fR skips the question and \fB\-\-dry\-run\fR shows what would go where. A seat counts as on this machine only when its server is local, it is not marked \fBremote = true\fR, and its model is not an Ollama cloud model. A seat that sends your API key to a custom \fBbase_url\fR is flagged.
 .SH CALIBRATION
 .PP
 \fBkea calibration\fR scores every prediction marked true, false or partial. The Brier score is the mean of the squared gap between the confidence you stated and what happened: 0 is perfect, 0.25 is what always saying 50% earns. Skill is how much better than that coin you are. The buckets show, for each band of stated confidence, how often those predictions came true: if your 80% predictions come true half the time, you are overconfident there.
@@ -312,7 +312,7 @@ The packet holds the files in \fB[brief] include\fR and the plan. Free tiers may
 .PP
 kea is made to be used by AI agents as much as by people.
 .PP
-\fBSkills.\fR \fBkea skill install\fR copies three skills into every agent folder it finds: ~/.claude/skills, ~/.codex/skills, ~/.config/opencode/skills and ~/.agents/skills. kea teaches the rules and the session routine, kea-council runs a council review, kea-frameworks turns a source into a framework.
+\fBSkills.\fR \fBkea skill install\fR copies three skills to two places: ~/.claude/skills, which Claude Code and OpenCode read, and ~/.agents/skills, which Codex and other agents read. Writing an agent's own folder too would make it list every skill twice, so \fB\-\-agent codex\fR and \fB\-\-agent opencode\fR write those folders only when asked. kea teaches the rules and the session routine, kea-council runs a council review, kea-frameworks turns a source into a framework.
 .PP
 \fBClaude Code plugin.\fR The repository is a plugin with the skills and the MCP server:
 .RS 4
@@ -322,7 +322,7 @@ kea is made to be used by AI agents as much as by people.
 .fi
 .RE
 .PP
-\fBMCP server.\fR \fBkea mcp\fR speaks the Model Context Protocol on stdio. Tools: brain_status, state, search, show, decisions, predictions, roadmap, check, plans, seats, effort, log_entry, record_fact, decide, revisit_decision, predict, score_prediction, add_idea, roadmap_add, roadmap_done, plan_new, brief, synth, ingest and council_run. Read tools are marked read only; council_run sends data off the machine and needs confirm set to true. Resources expose STATE.md, ROADMAP.md, DECISIONS.md, PREDICTIONS.md and AGENTS.md; prompts start_session, end_session and chair_review appear as slash commands in clients that show them.
+\fBMCP server.\fR \fBkea mcp\fR speaks the Model Context Protocol on stdio. Tools: brain_status, state, search, show, decisions, predictions, roadmap, check, plans, seats, effort, log_entry, record_fact, decide, revisit_decision, predict, score_prediction, add_idea, roadmap_add, roadmap_done, plan_new, brief, synth, ingest and council_run. Arguments are checked against each tool's schema. The server uses \fBKEA_BRAIN\fR, then your default brain, and only then a \fBkea.toml\fR above the folder the agent runs in, so a project's own files never take over; initialize names the brain in use. Two limits keep an agent from acting for you: ingest only rescans sources you added in a terminal, and council_run runs only the seats on this machine unless kea.toml sets \fB[council] agents_may_send = true\fR. Resources expose STATE.md, ROADMAP.md, DECISIONS.md, PREDICTIONS.md and AGENTS.md; prompts start_session, end_session and chair_review appear as slash commands in clients that show them.
 .PP
 Claude Code, for every project:
 .RS 4
@@ -340,14 +340,14 @@ args = ["mcp"]
 .fi
 .RE
 .PP
-Cursor (~/.cursor/mcp.json), Gemini CLI (~/.gemini/settings.json) and Claude Desktop take the same JSON:
+Cursor (~/.cursor/mcp.json) and Gemini CLI (~/.gemini/settings.json) take this JSON. Claude Desktop takes it too, in claude_desktop_config.json, but starts servers without your shell's PATH: put the full path from \fBwhich kea\fR as the command there.
 .RS 4
 .nf
 {"mcpServers": {"kea": {"command": "kea", "args": ["mcp"], "env": {"KEA_BRAIN": "/home/you/brain"}}}}
 .fi
 .RE
 .PP
-Without kea installed, use \fBuvx\fR as the command and \fB\-\-from git+https://github.com/jpsanders/kea kea mcp\fR as the arguments; the first start downloads it. Set \fBKEA_BRAIN\fR where the client starts servers outside your projects.
+Without kea installed, use \fBuvx\fR as the command and \fB\-\-python 3.15 \-\-from git+https://github.com/jpsanders/kea kea mcp\fR as the arguments; the first start downloads it. Set \fBKEA_BRAIN\fR where the client starts servers outside your projects.
 .SH FILES
 .TP
 kea.toml
@@ -377,12 +377,20 @@ Where Claude Code and Codex keep sessions and skills
 .TP
 NO_COLOR
 Plain output, no colour
+.SH DOCKER
+.RS 4
+.nf
+docker build \-t kea . && docker run \-\-rm \-it \-\-user "$(id \-u):$(id \-g)" \-v ~/brain:/brain kea status
+.fi
+.RE
+.PP
+\fB\-\-user\fR runs kea as you, so it can write your brain and its index.
 .SH EXIT STATUS
 .PP
 0 on success. 1 when a command fails, when kea check finds an error (or a warning, with --strict), or when no seat returned. 2 for a mistake in the arguments. With --json, a failure also prints {"error": "..."}.
 .SH PRIVACY AND SECURITY
 .PP
-Everything stays on your machine: the brain is your folder, and the index is a SQLite file inside it that git ignores. kea never reads paths that name a credential store (.ssh, .aws, .env, .gnupg, credentials, secrets and more; add your own under [ingest] deny), and it replaces anything shaped like a key or token with [REDACTED] before storing text. The only network calls are the council seats you configure and run. Report security problems privately: https://github.com/jpsanders/kea/security/advisories/new
+Everything stays on your machine: the brain is your folder, and the index is a SQLite file inside it, readable only by you, that git ignores. kea never reads paths that name a credential store (.ssh, .aws, .env and .env.local, shell histories, .pem and .key files, credentials, secrets and more; add your own patterns under [ingest] deny), judges a symbolic link by where it points, and replaces anything shaped like a key or token with [REDACTED] before it stores text, before it writes to the ledger, and before a packet leaves. Changing the deny list rereads what it affects; a forgotten source stays out of later scans. The only network calls are the council seats you configure and run, and no request follows a redirect. Report security problems privately: https://github.com/jpsanders/kea/security/advisories/new
 .SH PERFORMANCE
 .PP
 kea starts in milliseconds: Python 3.15's lazy imports load only what a command uses. The index is SQLite with FTS5 and BM25 ranking; ingest runs in one transaction per source and skips anything unchanged. Measured on one Linux machine, 1.3 GB of Claude Code transcripts index in about five seconds, a second run takes a tenth of a second, and a search answers in about 50 ms.

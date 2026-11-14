@@ -33,7 +33,7 @@ else, and follow it in every session. The kea command line (or the kea MCP serve
 ```sh
 kea status                      # the whole brain, with health checks
 kea state                       # facts and the newest log entries
-kea search "what we decided about pricing"
+kea search pricing decision
 kea log "What happened" --source <where to check it>
 kea fact "Cash on hand" "EUR 4,200" --source "bank export"
 kea decide "Title" --decision "..." --why "..." --revisit +90d

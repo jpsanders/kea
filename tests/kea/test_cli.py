@@ -26,8 +26,9 @@ def test_init_sets_the_default_and_status_works_anywhere(run: Run, tmp_path: Pat
     assert code == 0 and "health" in out and "waiting for Ada" in out
     code, out, _ = run("init", str(tmp_path / "c"), "--no-git")
     assert "now your default brain" not in out
-    code, _, err = run("init", str(tmp_path / "b"), "--no-git")
-    assert code == 1 and "already a kea brain" in err
+    (tmp_path / "b" / "IDEAS.md").unlink()
+    code, out, _ = run("init", str(tmp_path / "b"), "--no-git")
+    assert code == 0 and "put back 1 missing file" in out and (tmp_path / "b" / "IDEAS.md").is_file()
 
 
 def test_example_status_and_listings(run: Run, run_json: Callable[..., Any], example: Brain) -> None:

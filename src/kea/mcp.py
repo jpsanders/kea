@@ -2,8 +2,10 @@
 A Model Context Protocol server, so any agent can read the brain, search the evidence and keep the ledger.
 
 It speaks JSON-RPC 2.0 over stdio (``kea mcp``), one message per line, with only the standard library. Tools map onto
-the CLI's commands. Read tools are marked read only; the one tool that sends data off the machine (``council_run``)
-is marked open world and needs ``confirm: true``. One bad message gets one error back and never stops the server.
+the CLI's commands and their arguments are checked against each tool's schema. Read tools are marked read only. The
+one tool that can send data off the machine, ``council_run``, runs only the seats on this machine unless the brain's
+kea.toml sets ``[council] agents_may_send = true``: an agent can never decide that on the user's behalf. One bad
+message gets one error back and never stops the server.
 """
 
 import json
@@ -207,18 +209,41 @@ def _council_run(brain: Brain, args: dict[str, Any]) -> Any:
     from kea import council
 
     if args.get("confirm") is not True:
-        raise ValueError("council_run sends the packet to outside providers: ask the user, then pass confirm: true")
-    return council.run(brain, str(args["slug"]), args.get("seats"), bool(args.get("resume")))
+        raise ValueError("council_run may send the packet to outside providers: ask the user, then pass confirm: true")
+    allowed = brain.setting("council", "agents_may_send", False) is True
+    try:
+        return council.run(
+            brain, str(args["slug"]), args.get("seats"), bool(args.get("resume")), local_only=not allowed
+        )
+    except council.CouncilError as exc:
+        if allowed:
+            raise
+        raise ValueError(
+            f"{exc}. From an agent, only seats on this machine run; the user can run kea council in a terminal, or "
+            "allow agents with [council] agents_may_send = true in kea.toml"
+        ) from exc
 
 
 def _ingest(brain: Brain, args: dict[str, Any]) -> Any:
-    from kea.ingest import ingest, ingest_known
+    from pathlib import Path
+
+    from kea.ingest import default_path, ingest, ingest_known
     from kea.store import Store
 
     with Store(brain.index_path) as store:
-        if args.get("source"):
-            return ingest(brain, store, str(args["source"]), args.get("path")).as_dict()
-        return [r.as_dict() for r in ingest_known(brain, store)]
+        if not args.get("source"):
+            return [r.as_dict() for r in ingest_known(brain, store)]
+        kind = str(args["source"])
+        known = {path for k, path in store.roots() if k == kind}
+        default = default_path(kind)
+        if default:
+            known.add(str(default.resolve()))
+        wanted = str(Path(args["path"]).expanduser().resolve()) if args.get("path") else None
+        if wanted and wanted not in known:
+            raise ValueError(
+                "agents may only rescan sources the user added: the user adds new ones with kea ingest in a terminal"
+            )
+        return ingest(brain, store, kind, wanted, revive=False).as_dict()
 
 
 def _effort(brain: Brain, args: dict[str, Any]) -> Any:
@@ -452,8 +477,8 @@ TOOLS: dict[str, tuple[str, dict[str, Any], Handler, bool, bool]] = {
         False,
     ),
     "council_run": (
-        "Send a plan's packet to every ready council seat. This sends the packet to outside model providers: ask the "
-        "user first, then pass confirm: true.",
+        "Send a plan's packet to the ready council seats. Unless the user allowed agents in kea.toml, only seats on "
+        "this machine run. Ask the user first, then pass confirm: true.",
         _schema(
             {
                 "slug": SLUG,
@@ -468,7 +493,8 @@ TOOLS: dict[str, tuple[str, dict[str, Any], Handler, bool, bool]] = {
         True,
     ),
     "ingest": (
-        "Read a source into the local index (nothing leaves the machine). With no source, scan everything known again.",
+        "Rescan the local index: with no source, everything known; with a source, its usual place or a path the user "
+        "added before. What it reads becomes searchable through search and show, and so can reach you.",
         _schema(
             {
                 "source": _s(
@@ -514,6 +540,35 @@ PROMPTS = {
 }
 
 
+_TYPES: dict[str, tuple[type, ...]] = {"string": (str,), "integer": (int,), "boolean": (bool,), "array": (list,)}
+
+
+def _validate(schema: dict[str, Any], args: dict[str, Any]) -> None:
+    """
+    Check tool arguments against the tool's schema: required, known, types, enums and bounds.
+
+    :param schema: The tool's input schema
+    :param args: The arguments
+    :raises ValueError: On the first argument that does not fit
+    """
+    missing = [k for k in schema["required"] if k not in args]
+    unknown = [k for k in args if k not in schema["properties"]]
+    if missing or unknown:
+        raise ValueError(f"missing {missing}, unknown {unknown}" if unknown else f"missing {missing}")
+    for key, value in args.items():
+        rule = schema["properties"][key]
+        kinds = _TYPES.get(rule.get("type", ""), (object,))
+        if not isinstance(value, kinds) or (rule.get("type") == "integer" and isinstance(value, bool)):
+            raise ValueError(f"{key} must be a {rule.get('type')}")
+        if "enum" in rule and value not in rule["enum"]:
+            raise ValueError(f"{key} must be one of {rule['enum']}")
+        if isinstance(value, int) and not isinstance(value, bool):
+            if "minimum" in rule and value < rule["minimum"] or "maximum" in rule and value > rule["maximum"]:
+                raise ValueError(f"{key} must be from {rule.get('minimum')} to {rule.get('maximum')}")
+        if isinstance(value, list) and not all(isinstance(v, str) for v in value):
+            raise ValueError(f"{key} must be a list of strings")
+
+
 class Server:
     """Answers MCP messages for one brain."""
 
@@ -528,7 +583,7 @@ class Server:
         :returns: The brain
         """
         if self._brain is None:
-            self._brain = Brain.locate(self.brain_path)
+            self._brain = Brain.locate(self.brain_path, prefer_default=True)
         return self._brain
 
     def handle(self, message: Any) -> dict[str, Any] | None:
@@ -559,11 +614,15 @@ class Server:
     def _dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         if method == "initialize":
             asked = str(params.get("protocolVersion", ""))
+            try:
+                where = f" The brain in use: {self.brain().name}, at {self.brain().root}."
+            except BrainError:
+                where = " No brain was found yet: the user makes one with kea init, or sets KEA_BRAIN."
             return {
                 "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
                 "capabilities": {"tools": {"listChanged": False}, "resources": {}, "prompts": {}},
                 "serverInfo": {"name": "kea", "title": "kea second brain", "version": __version__},
-                "instructions": INSTRUCTIONS,
+                "instructions": INSTRUCTIONS + where,
             }
         if method == "ping":
             return {}
@@ -600,11 +659,7 @@ class Server:
             raise ValueError(f"unknown tool {name!r}")
         if not isinstance(args, dict):
             raise ValueError("arguments must be an object")
-        schema = TOOLS[name][1]
-        missing = [k for k in schema["required"] if k not in args]
-        unknown = [k for k in args if k not in schema["properties"]]
-        if missing or unknown:
-            raise ValueError(f"missing {missing}, unknown {unknown}" if unknown else f"missing {missing}")
+        _validate(TOOLS[name][1], args)
         try:
             result = TOOLS[name][2](self.brain(), args)
         except BrainError as exc:
@@ -612,10 +667,11 @@ class Server:
         except Exception as exc:  # noqa: BLE001  the tool's error goes back to the agent, the server lives on
             return {"content": [{"type": "text", "text": f"Error: {exc}"}], "isError": True}
         text = json.dumps(result, indent=1, default=str, ensure_ascii=False)
-        if len(text) > MAX_TEXT:
+        cut = len(text) > MAX_TEXT
+        if cut:
             text = text[:MAX_TEXT] + "\n... (cut; ask for less with limit)"
         out: dict[str, Any] = {"content": [{"type": "text", "text": text}], "isError": False}
-        if isinstance(result, dict):
+        if isinstance(result, dict) and not cut:
             out["structuredContent"] = json.loads(json.dumps(result, default=str))
         return out
 
@@ -674,14 +730,18 @@ def serve(server: Server, reader: TextIO | None = None, writer: TextIO | None = 
         if not line:
             continue
         try:
-            message = json.loads(line)
-        except ValueError:
-            out.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}))
-            out.write("\n")
-            out.flush()
-            continue
-        batch = message if isinstance(message, list) else [message]
-        replies = [r for r in (server.handle(m) for m in batch) if r is not None]
-        for reply in replies:
-            out.write(json.dumps(reply, default=str, ensure_ascii=False) + "\n")
+            try:
+                message = json.loads(line)
+            except ValueError, RecursionError:
+                replies: list[dict[str, Any]] = [
+                    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
+                ]
+            else:
+                batch = message if isinstance(message, list) else [message]
+                replies = [r for r in (server.handle(m) for m in batch) if r is not None]
+            text = "".join(json.dumps(reply, default=str, ensure_ascii=True) + "\n" for reply in replies)
+        except Exception as exc:  # noqa: BLE001  one bad line gets one error, the server lives on
+            error = {"code": -32603, "message": f"{type(exc).__name__}"}
+            text = json.dumps({"jsonrpc": "2.0", "id": None, "error": error}) + "\n"
+        out.write(text)
         out.flush()

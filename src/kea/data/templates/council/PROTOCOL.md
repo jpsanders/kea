@@ -38,7 +38,7 @@ mandatory section on what every seat missed.
 
 **R7. Predictions get written down and scored.** At least three, dated and falsifiable, per production plan.
 
-**R8. One council run per plan revision.** The council costs attention. Do not run it again for comfort.
+**R8. One review per version of the plan.** Each run costs attention; running it again to feel better is no reason.
 
 ## When to convene
 

@@ -1,7 +1,7 @@
 # Plan proposal: <slug>
 
 **Author:**
-**Date:** {{today}}
+**Date:** {{plan_date}}
 **Horizon:** <30 days | 90 days | 12 months>
 **Status:** DRAFT, then UNDER REVIEW, DECIDED, EXECUTING, CLOSED
 

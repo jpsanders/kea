@@ -53,7 +53,8 @@ def default_brain() -> Path | None:
         value = tomllib.loads(path.read_text(encoding="utf-8")).get("brain")
     except tomllib.TOMLDecodeError:
         return None
-    return Path(value).expanduser() if isinstance(value, str) and value else None
+    folder = Path(value).expanduser() if isinstance(value, str) and value else None
+    return folder if folder and (folder / MARKER).is_file() else None
 
 
 def set_default_brain(folder: Path) -> Path:
@@ -105,24 +106,28 @@ class Brain:
         return cls(root, config)
 
     @classmethod
-    def locate(cls, explicit: str | None = None, cwd: Path | None = None) -> "Brain":
+    def locate(cls, explicit: str | None = None, cwd: Path | None = None, prefer_default: bool = False) -> "Brain":
         """
         Find the brain to work on.
 
         :param explicit: A folder from ``--brain``, which wins over everything else
         :param cwd: Where to start looking upwards; the current folder when omitted
+        :param prefer_default: Try the default brain before the folders above cwd, as the MCP server does, so a
+            ``kea.toml`` inside a project an agent happens to run in never takes over
         :returns: The brain
         :raises BrainError: When no brain is found
         """
         chosen = explicit or os.environ.get("KEA_BRAIN")
         if chosen:
             return cls.load(Path(chosen))
+        fallback = default_brain()
+        if prefer_default and fallback:
+            return cls.load(fallback)
         here = (cwd or Path.cwd()).resolve()
         for folder in (here, *here.parents):
             if (folder / MARKER).is_file():
                 return cls.load(folder)
-        fallback = default_brain()
-        if fallback and (fallback / MARKER).is_file():
+        if fallback:
             return cls.load(fallback)
         raise BrainError(
             "no kea brain found here, in any parent folder, or as the default. "
@@ -236,7 +241,7 @@ def today(tz: str | None = None) -> date:
 
 def parse_date(text: str, base: date | None = None) -> date | None:
     """
-    Read a date: ``2026-12-01``, ``today``, ``tomorrow``, or an offset such as ``+30d``, ``+2w`` or ``+3m``.
+    Read a date: ``2026-12-01``, ``today``, ``tomorrow``, or an offset such as ``+30d``, ``+2w``, ``+3m`` or ``-7d``.
 
     :param text: The text
     :param base: The date offsets count from; today when omitted
@@ -248,15 +253,17 @@ def parse_date(text: str, base: date | None = None) -> date | None:
         return start
     if text == "tomorrow":
         return start + timedelta(days=1)
-    m = re.fullmatch(r"\+(\d{1,4})([dwm])", text)
+    m = re.fullmatch(r"([+-])(\d{1,4})([dwm])", text)
     if m:
-        n, unit = int(m[1]), m[2]
+        n, unit = int(m[2]) * (1 if m[1] == "+" else -1), m[3]
         if unit == "d":
             return start + timedelta(days=n)
         if unit == "w":
             return start + timedelta(weeks=n)
         month = start.month - 1 + n
         year, month = start.year + month // 12, month % 12 + 1
+        if not 1 <= year <= 9999:
+            return None
         return date(year, month, min(start.day, calendar.monthrange(year, month)[1]))
     m = re.search(r"\d{4}-\d{2}-\d{2}", text)
     if m:
@@ -297,20 +304,24 @@ def init(
     git: bool = True,
 ) -> list[str]:
     """
-    Make a new brain from the bundled templates.
+    Make a new brain from the bundled templates, or put back the files an existing brain is missing.
+
+    On a folder that is already a brain, only missing files are written. ``force`` overwrites the rest too, after
+    copying each one to ``.kea/backup-<time>/``. ``git init`` runs only for a new or empty folder.
 
     :param folder: Where to make it; created when missing
     :param name: The brain's name; the folder's name when omitted
     :param owner: Whose brain it is
     :param example: Fill it with the example brain, a made up coffee roastery, to explore
-    :param force: Overwrite files that already exist
-    :param git: Run ``git init`` when the folder is not a repository yet
+    :param force: Overwrite files that already exist, keeping a backup of each
+    :param git: Run ``git init`` when the folder is new or empty
     :returns: The files written, relative to the folder
-    :raises BrainError: When the folder is already a brain and force is off
+    :raises BrainError: When the folder is the home folder or the file system root
     """
     folder = folder.expanduser().resolve()
-    if (folder / MARKER).exists() and not force:
-        raise BrainError(f"{folder} is already a kea brain; use --force to overwrite its files")
+    if folder == Path.home().resolve() or folder == Path(folder.anchor):
+        raise BrainError(f"make the brain in a folder of its own, such as {Path.home() / 'brain'}, not in {folder}")
+    fresh = not folder.exists() or not any(folder.iterdir())
     base = today()
     values = {
         "name": name or ("Tidewater Coffee" if example else folder.name.replace("-", " ").replace("_", " ").title()),
@@ -327,15 +338,20 @@ def init(
             parts[-1] = DOTFILES.get(parts[-1], parts[-1])
             planned["/".join(parts)] = item
     written = []
+    backup = folder / INDEX_DIR / f"backup-{now():%Y%m%d-%H%M%S}"
     for rel, item in planned.items():
         target = folder / rel
-        if target.exists() and not force:
-            continue
+        if target.exists():
+            if not force:
+                continue
+            saved = backup / rel
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(target, saved)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(_render(item.read_text(encoding="utf-8"), values, base), encoding="utf-8")
         written.append(rel)
-    (folder / INDEX_DIR).mkdir(exist_ok=True)
+    (folder / INDEX_DIR).mkdir(mode=0o700, exist_ok=True)
     git_bin = shutil.which("git")
-    if git and git_bin and not (folder / ".git").exists():
+    if git and fresh and git_bin and not (folder / ".git").exists():
         subprocess.run([git_bin, "init", "-q", str(folder)], check=False)  # nosec B603: git init, fixed arguments
     return sorted(written)

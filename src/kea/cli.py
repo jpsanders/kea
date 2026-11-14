@@ -10,6 +10,7 @@ The manual that ``guide`` prints and ``man`` shows is built from one file, ``doc
 """
 
 import argparse
+import re  # argparse loads it anyway, so it costs nothing to start
 import sys
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -128,6 +129,23 @@ def _plural(n: int, word: str) -> str:
     return f"{n:,} {word}" + ("" if n == 1 else "s")
 
 
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _safe(text: str) -> str:
+    """Drop terminal control characters from text read from outside, so it can never move the cursor or retitle."""
+    return _CONTROL.sub("", text)
+
+
+def _since(text: str | None, brain: "Brain") -> str | None:
+    if not text:
+        return None
+    when = brain_mod.parse_date(text, brain.today())
+    if when is None:
+        raise ValueError(f"--since takes a date such as 2026-11-01, today, or -30d; not {text!r}")
+    return when.isoformat()
+
+
 def _ago(days: int) -> str:
     return "today" if days == 0 else "yesterday" if days == 1 else f"{days} days ago"
 
@@ -148,16 +166,33 @@ def cmd_init(args: argparse.Namespace) -> int:
     :returns: Exit code
     """
     folder = Path(args.path or ".").expanduser().resolve()
+    existed = (folder / brain_mod.MARKER).is_file()
     written = brain_mod.init(folder, args.name, args.owner, args.example, args.force, not args.no_git)
     default = None
-    if args.default or (not args.no_default and brain_mod.default_brain() is None):
+    current = brain_mod.default_brain()
+    if args.default or (not args.no_default and not args.example and current is None):
         default = str(brain_mod.set_default_brain(folder))
-    data = {"path": str(folder), "files": written, "default_config": default, "example": args.example}
+        current = folder
+    data = {
+        "path": str(folder),
+        "files": written,
+        "default_config": default,
+        "default_brain": str(current) if current else None,
+        "example": args.example,
+        "repaired": existed and not args.force,
+    }
 
     def human(p: Paint) -> None:
+        if existed and not args.force:
+            restored = f"put back {_plural(len(written), 'missing file')}" if written else "found nothing missing"
+            print(f"{p.accent('kea')} {_home(str(folder))} is already a brain: {restored}; nothing else changed")
+            return
         print(f"{p.accent('kea')} made a brain in {p.bold(_home(str(folder)))} ({_plural(len(written), 'file')})")
         if default:
             print(f"  it is now your default brain {p.dim('(' + _home(default) + ')')}")
+        elif current and current.resolve() != folder:
+            hint = "kea init --default " + _home(str(folder))
+            print(f"  your default brain is still {_home(str(current))} {p.dim('· to change it: ' + hint)}")
         print("next:")
         print(f"  cd {_home(str(folder))} && kea status")
         print(f"  kea skill install    {p.dim('# teach Claude Code, Codex and OpenCode to use it')}")
@@ -201,6 +236,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             state_line += f", {s['stale_facts']} past recheck"
         if s["unverified"]:
             state_line += f" · {s['unverified']} UNVERIFIED"
+        if s["bad_dates"]:
+            state_line += p.bad(f" · impossible dates on lines {', '.join(map(str, s['bad_dates']))}")
         print(f"  {'state':<12} {state_line}")
         due = f" · {len(d['due'])} due for revisit ({', '.join(d['due'])})" if d["due"] else ""
         print(f"  {'decisions':<12} {d['active']} active{due}")
@@ -397,7 +434,8 @@ def cmd_predictions(args: argparse.Namespace) -> int:
             status = r["status"]
             paint = {"TRUE": p.good, "FALSE": p.bad, "PARTIAL": p.warn}.get(status, str)
             shown = p.warn(f"{'DUE':<7}") if r["due"] else paint(f"{status:<7}")
-            print(f"{p.accent(r['id'])} {r['confidence']:>3}% by {r['by']} {shown} {r['claim']}")
+            conf = f"{r['confidence']:>3}%" if r["confidence"] is not None else "  ?%"
+            print(f"{p.accent(r['id'])} {conf} by {r['by']} {shown} {r['claim']}")
         if not rows:
             print(p.dim("no predictions here"))
 
@@ -571,11 +609,12 @@ def cmd_council(args: argparse.Namespace) -> int:
                 return
             print(f"would send {size:,} bytes to {_plural(len(rows), 'seat')}:")
             for r in rows:
-                where = "this machine" if r["local"] else r["provider"]
-                print(f"  {p.accent(f'{r['seat']:<12}')} {r['model']} {p.dim('· ' + where)}")
+                where = f"this machine ({r['host']})" if r["local"] else r["host"]
+                flag = p.warn(" · your key goes to a custom endpoint") if r["custom"] else ""
+                print(f"  {p.accent(f'{r['seat']:<12}')} {r['model']} {p.dim('· ' + where)}{flag}")
 
         return emit(args, data, human)
-    outside = sorted({r["provider"] for r in rows if not r["local"]})
+    outside = sorted({r["host"] for r in rows if not r["local"]})
     if outside and not args.yes:
         if not sys.stdin.isatty():
             raise CouncilError(f"this sends the packet to {', '.join(outside)}; add --yes to confirm")
@@ -626,16 +665,29 @@ def cmd_seats(args: argparse.Namespace) -> int:
 
     :param args: Parsed arguments
     :returns: Exit code
+    :raises CouncilError: When a probe would send a key to a custom endpoint without a yes
     """
-    rows = council.seats(_brain(args), args.probe)
+    brain = _brain(args)
+    rows = council.seats(brain)
+    custom = sorted({r["host"] for r in rows if r["ready"] and r["custom"]})
+    if args.probe and custom and not args.yes:
+        if not sys.stdin.isatty():
+            raise CouncilError(f"--probe sends your API key to custom endpoints ({', '.join(custom)}); add --yes")
+        answer = input(f"--probe sends your API key to {', '.join(custom)}. Go ahead? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("nothing sent")
+            return 1
+    if args.probe:
+        rows = council.seats(brain, True)
 
     def human(p: Paint) -> None:
         for r in rows:
-            word = "ready" if r["ready"] else ("not running" if r["local"] else "no key") if r["enabled"] else "off"
+            missing = "not running" if r["key"] == "none needed" else "no key"
+            word = "ready" if r["ready"] else missing if r["enabled"] else "off"
             state = (p.good if r["ready"] else p.dim)(f"{word:<11}")
             if "answered" in r:
                 state = p.good(f"{'answered':<11}") if r["answered"] else p.bad(f"{'failed':<11}")
-            where = "local" if r["local"] else r["provider"]
+            where = f"this machine ({r['host']})" if r["local"] else r["host"]
             print(f"  {p.accent(f'{r['seat']:<12}')} {state} {r['model']} {p.dim('· ' + where + ' · ' + r['key'])}")
             if r.get("detail") and not r.get("answered"):
                 print(p.dim(f"      {r['detail']}"))
@@ -733,22 +785,23 @@ def cmd_search(args: argparse.Namespace) -> int:
     """
     brain = _brain(args)
     query = " ".join(args.query)
+    since = _since(args.since, brain)
     with store.Store(brain.index_path) as db:
         if not args.no_refresh:
             ingest.refresh_brain(brain, db)
-        hits = db.search(query, args.kind, args.platform, args.mine, args.since, args.limit, args.any)
+        hits = db.search(query, args.kind, args.platform, args.mine, since, args.limit, args.any)
 
     def human(p: Paint) -> None:
         for h in hits:
             when = (h["ts"] or "")[:10]
             who = f" · {h['role']}" if h["role"] else ""
-            title = (h["title"] or "")[:70]
+            title = _safe(h["title"] or "")[:70]
             print(f"{p.accent(str(h['id']).rjust(6))} {p.dim(h['platform'] + who)} {p.bold(title)} {p.dim(when)}")
-            snippet = " ".join((h["snippet"] or "").split())
+            snippet = " ".join(_safe(h["snippet"] or "").split())
             if p.on:
                 snippet = snippet.replace("[", "\033[1m").replace("]", "\033[0m")
             print(f"       {snippet[:220]}")
-            print(p.dim(f"       {_home(h['ref'])}"))
+            print(p.dim(f"       {_safe(_home(h['ref']))}"))
         if not hits:
             print(p.dim("no matches. Index more with kea ingest, or try fewer words or --any"))
 
@@ -772,16 +825,16 @@ def cmd_show(args: argparse.Namespace) -> int:
     data = {"item": item, "context": around}
 
     def human(p: Paint) -> None:
-        print(f"{p.accent('#' + str(item['id']))} {p.bold(item['title'] or '')}")
-        print(p.dim(f"from   {item['source_kind']} · {_home(item['source_path'])}"))
-        print(p.dim(f"ref    {_home(item['ref'])}"))
+        print(f"{p.accent('#' + str(item['id']))} {p.bold(_safe(item['title'] or ''))}")
+        print(p.dim(f"from   {item['source_kind']} · {_safe(_home(item['source_path']))}"))
+        print(p.dim(f"ref    {_safe(_home(item['ref']))}"))
         print(p.dim(f"when   {item['ts'] or 'undated'} · {item['role'] or item['kind']}"))
         print()
         for row in around:
             if len(around) > 1:
                 marker = p.accent("▶") if row["id"] == item["id"] else " "
                 print(f"{marker} {p.bold(row['role'] or '')} {p.dim(str(row['ts'] or ''))}")
-            print(row["body"])
+            print(_safe(row["body"]))
             print()
 
     return emit(args, data, human)
@@ -796,7 +849,7 @@ def cmd_effort(args: argparse.Namespace) -> int:
     """
     brain = _brain(args)
     with store.Store(brain.index_path) as db:
-        rows = db.effort(args.since, args.months)
+        rows = db.effort(_since(args.since, brain), args.months)
 
     def human(p: Paint) -> None:
         if not rows:
@@ -831,7 +884,18 @@ def cmd_digest(args: argparse.Namespace) -> int:
     source = Path(args.transcript).expanduser() if args.transcript else digest_mod.latest_transcript(Path.cwd())
     if source is None or not source.is_file():
         raise ValueError("name a transcript (.jsonl), or run from a project folder with Claude Code sessions")
-    result = digest_mod.digest(source, Path(args.out).expanduser(), args.label, args.tz)
+    if args.out:
+        out = Path(args.out).expanduser()
+    else:
+        try:
+            out = _brain(args).file("digests")
+        except BrainError:
+            out = Path.cwd()
+            if any((folder / ".git").exists() for folder in (out, *out.parents)):
+                raise ValueError(
+                    "refusing to write a private transcript into this git working tree: name a folder with -o"
+                ) from None
+    result = digest_mod.digest(source, out, args.label, args.tz)
     data = dict(result.__dict__)
 
     def human(p: Paint) -> None:
@@ -1048,6 +1112,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("slug")
     p = add("seats", cmd_seats, "the council's seats and whether each can run")
     p.add_argument("--probe", action="store_true", help="ask each ready seat to answer")
+    p.add_argument("--yes", action="store_true", help="probe custom endpoints without asking")
 
     p = add("ingest", cmd_ingest, "index sources locally: claude-code, codex, opencode, chatgpt, claude, git, docs")
     p.add_argument("source", nargs="?", choices=INGEST_KINDS, help="the adapter (default: rescan everything known)")
@@ -1062,20 +1127,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kind", choices=["message", "commit", "doc", "note"])
     p.add_argument("--platform", help="claude-code, codex, opencode, chatgpt, claude, git, docs or brain")
     p.add_argument("--mine", action="store_true", help="only what you wrote")
-    p.add_argument("--since", metavar="DATE", help="only on or after this date")
+    p.add_argument("--since", metavar="DATE", help="only on or after this date: 2026-11-01, today, -30d")
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--any", action="store_true", help="match any word instead of every word")
-    p.add_argument("--no-refresh", action="store_true", help="skip re-reading the brain's own files first")
+    p.add_argument("--no-refresh", action="store_true", help="skip reading the brain's own files again first")
     p = add("show", cmd_show, "one search hit in full, with where it came from")
     p.add_argument("id", type=int)
     p.add_argument("--context", type=int, default=0, metavar="N", help="items on each side (default 0)")
     p = add("effort", cmd_effort, "where your attention went: your prompts per project")
-    p.add_argument("--since", metavar="DATE")
+    p.add_argument("--since", metavar="DATE", help="only from this date: 2026-11-01 or -90d")
     p.add_argument("--months", action="store_true", help="split by month")
     p.add_argument("--limit", type=int, default=25)
     p = add("digest", cmd_digest, "turn a Claude Code transcript into readable files")
     p.add_argument("transcript", nargs="?", help="a .jsonl transcript (default: this folder's newest session)")
-    p.add_argument("-o", "--out", default=".", help="where to write (default: here)")
+    p.add_argument("-o", "--out", help="where to write (default: the brain's digests folder, which git ignores)")
     p.add_argument("--label", help="the folder's name (default: the session id)")
     p.add_argument("--tz", help="time zone for the times shown, such as Europe/London")
 
@@ -1109,18 +1174,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("\nno brain yet. Start one: kea init ~/brain   (or explore: kea init /tmp/demo --example)")
             return 0
         args = parser.parse_args([*(argv or sys.argv[1:]), "status"])
+    if args.command == "plan" and args.action == "new" and not args.slug:
+        parser.error("kea plan new needs a slug, such as 2026-12-pricing")
     try:
         result: int = args.func(args)
-    except (BrainError, LedgerError, CouncilError, ProviderError, ValueError, KeyError, OSError) as exc:
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:  # noqa: BLE001  every failure ends as one clear line, and as JSON under --json
+        known = (BrainError, LedgerError, CouncilError, ProviderError, ValueError, KeyError, OSError)
         message = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
+        if type(exc).__module__ == "sqlite3" or "sqlite3" in type(exc).__qualname__:
+            message = f"the search index could not be used ({exc}); delete the brain's .kea folder and run kea ingest"
+        elif not isinstance(exc, known):
+            message = f"{type(exc).__name__}: {exc}"
         if getattr(args, "json", False):
             print(json.dumps({"error": message}))
         print(f"{PROG}: {message}", file=sys.stderr)
         return 1
-    except KeyboardInterrupt:
-        return 130
-    except BrokenPipeError:
-        return 0
     return result
 
 

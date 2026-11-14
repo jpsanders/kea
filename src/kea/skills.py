@@ -2,8 +2,10 @@
 Install kea's agent skills where each agent looks for them.
 
 The same ``SKILL.md`` files work in Claude Code, Codex, OpenCode and any agent that reads the shared
-``~/.agents/skills`` folder. ``kea skill install`` copies them into every agent found on the machine, or into the
-ones named, and touches nothing but kea's own skill folders.
+``~/.agents/skills`` folder. By default ``kea skill install`` writes two places: ``~/.claude/skills``, which Claude
+Code and OpenCode read, and ``~/.agents/skills``, which Codex and other agents read. Writing an agent's own folder as
+well would make it list every skill twice, so ``codex`` and ``opencode`` are written only when named. It touches
+nothing but kea's own skill folders.
 """
 
 import os
@@ -56,7 +58,7 @@ def install(chosen: list[str] | None = None, dry_run: bool = False) -> list[dict
     """
     Copy the bundled skills into agents' skills folders.
 
-    :param chosen: Agents to install for; every agent whose folder's parent exists when omitted
+    :param chosen: Targets to install for; when omitted, claude and agents, each where its agents are installed
     :param dry_run: Only say what would be written
     :returns: One row per skill and agent, with the path and what happened
     :raises KeyError: When an agent name is unknown
@@ -68,7 +70,12 @@ def install(chosen: list[str] | None = None, dry_run: bool = False) -> list[dict
             raise KeyError(f"unknown agent {unknown[0]!r}; choose from {', '.join(places)}")
         wanted = {c: places[c] for c in chosen}
     else:
-        wanted = {name: path for name, path in places.items() if path.parent.is_dir()}
+        home = Path.home()
+        wanted = {}
+        if places["claude"].parent.is_dir() or (home / ".config" / "opencode").is_dir():
+            wanted["claude"] = places["claude"]
+        if places["agents"].parent.is_dir() or places["codex"].parent.is_dir():
+            wanted["agents"] = places["agents"]
     rows = []
     for agent, folder in wanted.items():
         for name, source in bundled().items():

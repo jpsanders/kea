@@ -7,8 +7,10 @@ Messages API. Keys come from environment variables named in the roster and are o
 URL, so an error message can never echo one. A key is never sent over plain HTTP to a host that is not this machine.
 """
 
+import http.client
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +40,24 @@ PRESETS: dict[str, tuple[str, str | None, str]] = {
 }
 RETRY_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+SEAT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,40}$")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect, so a key in a header can never follow one to another host."""
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        """
+        Turn a redirect into an error.
+
+        :param args: Ignored
+        :param kwargs: Ignored
+        :returns: None, which makes urllib raise the redirect as an HTTP error
+        """
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
 
 
 class ProviderError(Exception):
@@ -61,6 +81,8 @@ class Seat:
     timeout: int = 600
     enabled: bool = True
     note: str = ""
+    remote: bool = False
+    custom: bool = False
 
     @classmethod
     def from_config(cls, raw: dict[str, Any]) -> "Seat":
@@ -81,6 +103,9 @@ class Seat:
         for needed in ("name", "model"):
             if not raw.get(needed):
                 raise ProviderError(f"a seat needs a {needed}: {raw}")
+        if not SEAT_NAME.match(str(raw["name"])):
+            raise ProviderError(f"seat name {raw['name']!r}: use letters, digits and hyphens")
+        custom = bool(raw.get("base_url")) and str(raw["base_url"]).rstrip("/") != (preset[0] if preset else "")
         return cls(
             name=str(raw["name"]),
             role=str(raw.get("role") or str(raw["name"]).title()),
@@ -95,6 +120,8 @@ class Seat:
             timeout=int(raw.get("timeout", 600)),
             enabled=bool(raw.get("enabled", True)),
             note=str(raw.get("note", "")),
+            remote=bool(raw.get("remote", False)),
+            custom=custom,
         )
 
     @property
@@ -116,6 +143,25 @@ class Seat:
         return self.enabled and (self.key_env is None or bool(self.key))
 
     @property
+    def host(self) -> str:
+        """
+        The host and port the seat talks to.
+
+        :returns: Such as ``api.mistral.ai`` or ``localhost:11434``
+        """
+        return urlparse(self.base_url).netloc or self.base_url
+
+    @property
+    def stays_here(self) -> bool:
+        """
+        Whether the packet stays on this machine: a local server, not marked remote, and not an Ollama cloud model.
+
+        :returns: True when nothing leaves the machine
+        """
+        cloud = "cloud" in self.model.rsplit(":", 1)[-1].lower()
+        return self.local and not self.remote and not cloud
+
+    @property
     def local(self) -> bool:
         """
         True when the model runs on this machine.
@@ -133,7 +179,7 @@ def _post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: i
     request = urllib.request.Request(  # nosec B310: the scheme is checked above
         url, data=body, headers={"Content-Type": "application/json", "User-Agent": USER_AGENT, **headers}
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310: http or https only
+    with _OPENER.open(request, timeout=timeout) as response:  # nosec B310: http or https only, no redirects
         data = json.loads(response.read())
     if not isinstance(data, dict):
         raise ProviderError("the provider answered with something that is not a JSON object")
@@ -141,6 +187,13 @@ def _post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: i
 
 
 def _call(seat: Seat, system: str, user: str, max_tokens: int, temperature: float, timeout: int) -> str:
+    try:
+        return _ask(seat, system, user, max_tokens, temperature, timeout)
+    except (AttributeError, KeyError, TypeError, IndexError) as exc:
+        raise ProviderError(f"unexpected response shape from {seat.host}: {type(exc).__name__}") from exc
+
+
+def _ask(seat: Seat, system: str, user: str, max_tokens: int, temperature: float, timeout: int) -> str:
     key = seat.key
     if seat.key_env and not key:
         raise ProviderError(f"{seat.name}: set {seat.key_env} to use this seat")
@@ -233,7 +286,10 @@ def complete(
                 raise ProviderError("the model returned an empty answer")
             return out
         except urllib.error.HTTPError as exc:
-            detail = redact(exc.read().decode(errors="replace"))[:300]
+            try:
+                detail = redact(exc.read().decode(errors="replace"))[:300]
+            finally:
+                exc.close()
             last = f"HTTP {exc.code}: {detail}"
             if exc.code not in RETRY_CODES:
                 break
@@ -241,7 +297,7 @@ def complete(
             last = str(exc)
             if "set " in last or "refus" in last:
                 break
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             last = f"{type(exc).__name__}: {redact(str(exc))}"
         if attempt + 1 < retries:
             time.sleep(min(60, 4 * 2**attempt))

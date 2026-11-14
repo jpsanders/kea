@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from kea.brain import now
+from kea.redact import redact
 
 SCHEMA_VERSION = "1"
 
@@ -47,6 +48,12 @@ CREATE TABLE IF NOT EXISTS items (
     ref TEXT NOT NULL,
     body TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS forgotten (
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (kind, path)
+);
 CREATE TABLE IF NOT EXISTS roots (
     kind TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -75,6 +82,12 @@ END;
 """
 
 ITEM_COLUMNS = "kind, platform, project, thread, title, seq, role, author, mine, ts, ref, body"
+# Words that carry no meaning in a question; "what did we decide about pricing" searches for "decide pricing".
+STOPWORDS = frozenset(
+    "a about after all also am an and any are as at be been but by can could did do does for from had has have how i "
+    "if in into is it its me my of on or our over should so than that the their them then there these they this to "
+    "us was we were what when where which who why will with would you your".split()
+)
 
 
 @dataclass
@@ -105,33 +118,41 @@ def fts_query(text: str, any_word: bool = False) -> str:
     """
     terms = []
     for phrase, word in re.findall(r'"([^"]+)"|(\S+)', text):
-        chunk = phrase or word
-        tokens = re.findall(r"\w+", chunk)
-        if not tokens:
-            continue
-        terms.append('"' + " ".join(tokens) + '"' if phrase else " ".join(f'"{t}"' for t in tokens))
-    return (" OR " if any_word else " ").join(terms)
+        tokens = re.findall(r"\w+", phrase or word)
+        if phrase and tokens:
+            terms.append('"' + " ".join(tokens) + '"')
+        else:
+            terms += [f'"{t}"' for t in tokens]
+    meaningful = [t for t in terms if " " in t or t.strip('"').lower() not in STOPWORDS]
+    return (" OR " if any_word else " ").join(meaningful or terms)
 
 
 class Store:
     """The index of one brain. Opening it creates it."""
 
     def __init__(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.path = path
+        created = not path.exists()
         self.db = sqlite3.connect(path, timeout=30, isolation_level=None)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode = WAL")
-        self.db.execute("PRAGMA synchronous = NORMAL")
-        self.db.execute("PRAGMA foreign_keys = ON")
-        self.db.execute("PRAGMA temp_store = MEMORY")
-        self.db.executescript(SCHEMA)
         try:
-            self.db.executescript(FTS)
-            self.fts = True
-        except sqlite3.OperationalError:
-            self.fts = False  # a SQLite built without FTS5: search falls back to LIKE
-        self.db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema', ?)", (SCHEMA_VERSION,))
+            if created:
+                path.chmod(0o600)
+            self.db.row_factory = sqlite3.Row
+            self.db.execute("PRAGMA journal_mode = WAL")
+            self.db.execute("PRAGMA synchronous = NORMAL")
+            self.db.execute("PRAGMA foreign_keys = ON")
+            self.db.execute("PRAGMA temp_store = MEMORY")
+            self.db.executescript(SCHEMA)
+            try:
+                self.db.executescript(FTS)
+                self.fts = True
+            except sqlite3.OperationalError:
+                self.fts = False  # a SQLite built without FTS5: search falls back to LIKE
+            self.db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema', ?)", (SCHEMA_VERSION,))
+        except BaseException:
+            self.db.close()
+            raise
 
     def close(self) -> None:
         """Close the database."""
@@ -188,7 +209,12 @@ class Store:
         :returns: How many items it now holds
         """
         self.db.execute("DELETE FROM items WHERE source_id = ?", (source_id,))
-        rows = [(source_id, *astuple(item)) for item in items]
+        rows = []
+        for item in items:
+            item.title = redact(item.title) if item.title else item.title
+            item.project = redact(item.project) if item.project else item.project
+            item.body = redact(item.body)
+            rows.append((source_id, *astuple(item)))
         sql = f"INSERT INTO items (source_id, {ITEM_COLUMNS}) VALUES ({', '.join('?' * 13)})"  # nosec B608: constants
         self.db.executemany(sql, rows)
         self.db.execute(
@@ -208,6 +234,26 @@ class Store:
             "INSERT OR IGNORE INTO roots (kind, path, added_at) VALUES (?, ?, ?)",
             (kind, path, now().isoformat(timespec="seconds")),
         )
+
+    def is_forgotten(self, kind: str, path: str) -> bool:
+        """
+        Tell whether a source was forgotten and must not be read again.
+
+        :param kind: The adapter
+        :param path: The source's path
+        :returns: True when forgotten
+        """
+        row = self.db.execute("SELECT 1 FROM forgotten WHERE kind = ? AND path = ?", (kind, path)).fetchone()
+        return row is not None
+
+    def remember(self, kind: str, path: str) -> None:
+        """
+        Undo a forget: the source may be read again.
+
+        :param kind: The adapter
+        :param path: The source's path
+        """
+        self.db.execute("DELETE FROM forgotten WHERE kind = ? AND path = ?", (kind, path))
 
     def roots(self) -> list[tuple[str, str]]:
         """
@@ -246,13 +292,22 @@ class Store:
 
     def forget(self, ident: int | None = None, kind: str | None = None) -> int:
         """
-        Delete sources and everything read from them.
+        Delete sources and everything read from them, and keep them out of later scans.
+
+        A source forgotten by id is remembered as forgotten, so ``kea ingest`` never reads it back; naming its exact
+        path in ``kea ingest <kind> <path>`` brings it back. Forgetting a kind also drops its roots.
 
         :param ident: One source's id
         :param kind: Every source of one kind
         :returns: How many sources were deleted
         """
         if ident is not None:
+            row = self.db.execute("SELECT kind, path FROM sources WHERE id = ?", (ident,)).fetchone()
+            if row:
+                self.db.execute(
+                    "INSERT OR REPLACE INTO forgotten (kind, path, at) VALUES (?, ?, ?)",
+                    (row["kind"], row["path"], now().isoformat(timespec="seconds")),
+                )
             cur = self.db.execute("DELETE FROM sources WHERE id = ?", (ident,))
         elif kind:
             self.db.execute("DELETE FROM roots WHERE kind = ?", (kind,))
@@ -274,6 +329,9 @@ class Store:
         """
         Search every item, best match first, each with a snippet and its provenance.
 
+        Items with every word come first; when there are fewer than ``limit`` of them, items with any of the words
+        follow, so a question in plain words still finds its answer.
+
         :param query: Free text; quote a phrase to keep it together
         :param kind: ``message``, ``commit``, ``doc`` or ``note``
         :param platform: Such as ``claude-code``, ``chatgpt``, ``git`` or ``brain``
@@ -283,6 +341,7 @@ class Store:
         :param any_word: Match any word instead of every word
         :returns: Hits
         """
+        limit = max(1, min(int(limit), 500))
         where, params = [], []
         for column, value in (("i.kind", kind), ("i.platform", platform)):
             if value:
@@ -305,6 +364,11 @@ class Store:
                 "ORDER BY bm25(items_fts, 3.0, 1.0) LIMIT ?"
             )
             rows = self.db.execute(sql, [match, *params, limit]).fetchall()
+            wider = fts_query(query, any_word=True)
+            if len(rows) < limit and not any_word and wider != match:
+                seen = {r["id"] for r in rows}
+                more = self.db.execute(sql, [wider, *params, limit]).fetchall()
+                rows += [r for r in more if r["id"] not in seen][: limit - len(rows)]
         else:
             words = re.findall(r"\w+", query)
             if not words:
@@ -339,6 +403,7 @@ class Store:
         :param n: How many on each side
         :returns: The neighbours and the item, in order
         """
+        n = max(0, min(int(n), 50))
         if not n or item.get("thread") is None:
             return [item]
         rows = self.db.execute(

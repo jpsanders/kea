@@ -5,7 +5,8 @@
 > council of independent AI models; plus a local SQLite FTS5 index over past Claude Code, Codex and OpenCode
 > sessions, ChatGPT and Claude exports, git history and notes. Python 3.15, no dependencies, MIT.
 
-Install: `uv tool install git+https://github.com/jpsanders/kea`, then `kea init ~/brain` and `kea skill install`.
+Install: `uv tool install --python 3.15 git+https://github.com/jpsanders/kea`, then `kea init ~/brain` and
+`kea skill install`.
 Agents: the `kea mcp` server, three skills (kea, kea-council, kea-frameworks), and a Claude Code plugin
 (`/plugin marketplace add jpsanders/kea`, then `/plugin install kea@kea`). Every command takes `--json`.
 

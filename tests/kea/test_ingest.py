@@ -57,11 +57,11 @@ def claude_session(folder: Path, cwd: str = "/work/shop") -> Path:
 
 
 def test_parse_claude_code_keeps_only_prompts_and_replies(tmp_path: Path) -> None:
-    items, cwd = parse_claude_code(claude_session(tmp_path))
+    parsed = parse_claude_code(claude_session(tmp_path))
+    items, cwd = parsed.items, parsed.project
     assert cwd == "/work/shop"
     assert [(i.role, i.mine) for i in items] == [("user", True), ("assistant", False)]
     assert items[0].body == "Raise the price to 4.20"
-    assert SECRET not in items[1].body and "[REDACTED]" in items[1].body
     assert items[0].title == "Pricing work" and items[0].ref.endswith(":2")
 
 
@@ -106,7 +106,8 @@ def test_parse_codex_skips_injected_context(tmp_path: Path) -> None:
             {"type": "response_item", "payload": {"type": "reasoning"}},
         ],
     )
-    items, cwd = parse_codex(path)
+    parsed = parse_codex(path)
+    items, cwd = parsed.items, parsed.project
     assert cwd == "/work/app" and [i.body for i in items] == ["Fix the failing test", "Fixed it."]
     assert items[0].thread == "abc" and items[0].title == "Fix the failing test"
 
@@ -327,10 +328,14 @@ def test_docs_and_the_brain_itself(brain: Brain, tmp_path: Path) -> None:
         assert report.read == 2
         hit = store.search("charge")[0]
         assert hit["title"] == "Pricing" and hit["ref"].endswith("plan.md:5")
-        assert store.search("vendored") == [] and store.search("secret plan") == []
+        assert store.search("vendored") == [] and store.search("secret") == []
         assert store.search("roasting")[0]["kind"] == "doc"
         first = ingest.refresh_brain(brain, store)
-        assert first.read > 10
+        assert first.read >= 8
+        assert store.search("AGENTS", platform="brain") == [] or all(
+            "AGENTS.md" not in h["ref"] for h in store.search("AGENTS", platform="brain")
+        )
+        assert store.search("source of facts", platform="brain", mine=True) == []
         assert ingest.refresh_brain(brain, store).read == 0
         hit = store.search("source of facts", platform="brain")[0]
         assert hit["ref"].startswith("STATE.md:") and hit["kind"] == "note"
@@ -342,7 +347,9 @@ def test_docs_and_the_brain_itself(brain: Brain, tmp_path: Path) -> None:
 
 def test_fts_query_and_like_fallback(brain: Brain, tmp_path: Path) -> None:
     assert fts_query('flat "white coffee" c++') == '"flat" "white coffee" "c"'
-    assert fts_query("a b", any_word=True) == '"a" OR "b"'
+    assert fts_query("flat white", any_word=True) == '"flat" OR "white"'
+    assert fts_query("what did we decide about pricing") == '"decide" "pricing"'
+    assert fts_query("the") == '"the"'
     assert fts_query("!!!") == ""
     with Store(brain.index_path) as store:
         ingest.refresh_brain(brain, store)
