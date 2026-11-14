@@ -186,7 +186,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     existed = (folder / brain_mod.MARKER).is_file()
     had_ignore = (folder / ".gitignore").exists() or (folder / ".gitignore").is_symlink()
     before = brain_mod.last_backup(folder)
-    written = brain_mod.init(folder, args.name, args.owner, args.example, args.force, not args.no_git, args.add)
+    notes: list[str] = []
+    written = brain_mod.init(folder, args.name, args.owner, args.example, args.force, not args.no_git, args.add, notes)
     after = brain_mod.last_backup(folder)
     backup = after if after != before else None
     merged = had_ignore and ".gitignore" in written
@@ -203,6 +204,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         "example": args.example,
         "repaired": existed and not args.force,
         "backup": str(backup) if backup else None,
+        "notes": notes,
     }
 
     def human(p: Paint) -> None:
@@ -218,6 +220,8 @@ def cmd_init(args: argparse.Namespace) -> int:
             print("  every file that was already there is kept")
         if merged:
             print("  kea's lines were added to your .gitignore")
+        for note in notes:
+            print(f"  {p.warn(note)}")
         if backup:
             print(f"  the files it replaced are in {_home(str(backup))}")
         if default:

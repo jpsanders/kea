@@ -278,6 +278,10 @@ def roster(brain: Brain) -> Roster:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise CouncilError(f"council/roster.toml: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise CouncilError(f"council/roster.toml is not UTF-8 text (byte {exc.start}); save it as UTF-8") from exc
+    except OSError as exc:
+        raise CouncilError(f"council/roster.toml cannot be read: {exc.strerror or exc}") from exc
     seats, errors = [], []
     entries = raw.get("seat", [])
     if not isinstance(entries, list):
@@ -289,13 +293,17 @@ def roster(brain: Brain) -> Roster:
             continue
         try:
             seats.append(Seat.from_config(entry))
-        except (ProviderError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        except (ProviderError, KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
             errors.append(str(exc))
     limits = raw.get("rate_limits") or {}
     if not isinstance(limits, dict):
         errors.append("[rate_limits] must be a table of provider = seconds")
         limits = {}
-    gaps = {str(k): float(v) for k, v in limits.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    gaps = {
+        str(k): float(v)
+        for k, v in limits.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and 0 <= v <= 3600
+    }
     return Roster(seats, gaps, errors)
 
 

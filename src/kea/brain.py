@@ -274,20 +274,43 @@ def parse_date(text: str, base: date | None = None) -> date | None:
     return None
 
 
-def _merge_gitignore(target: Path, text: str, written: list[str]) -> None:
-    """Add kea's ignore lines to a .gitignore people wrote, skipping lines they negate; never through a link."""
-    if target.is_symlink():
-        return
+def _merge_gitignore(target: Path, text: str, written: list[str], notes: list[str]) -> None:
+    """
+    Add kea's ignore lines to a .gitignore people wrote, skipping lines they already have or negate.
+
+    The file keeps its own bytes and line endings: kea appends ASCII lines, which is safe in UTF-8, Latin-1 and every
+    encoding that keeps ASCII as it is. A link, an unreadable file, or UTF-16 is left alone, with a note saying which
+    lines to add by hand.
+    """
+    wanted = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
     try:
-        current = target.read_text(encoding="utf-8")
-    except OSError, UnicodeDecodeError:
-        return  # not text kea can read safely: leave it exactly as it is
-    have = {line.strip().lstrip("!") for line in current.splitlines()}
-    missing = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
-    missing = [line for line in missing if line.strip() not in have]
-    if missing:
-        target.write_text(current.rstrip("\n") + "\n\n# kea\n" + "\n".join(missing) + "\n", encoding="utf-8")
-        written.append(".gitignore")
+        raw: bytes | None = target.read_bytes()
+    except OSError:
+        raw = None
+    missing = wanted
+    if raw is not None:
+        have = {line.strip().lstrip("!") for line in raw.decode("latin-1").splitlines()}
+        missing = [line for line in wanted if line.strip() not in have]
+        if not missing:
+            return
+    why = None
+    if target.is_symlink():
+        why = "it is a link"
+    elif raw is None:
+        why = "it cannot be read"
+    elif raw.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw:
+        why = "its encoding takes more than one byte for each letter"
+    if why or raw is None:
+        notes.append(
+            f"kea left your .gitignore as it was ({why}); add {', '.join(missing)} to it yourself, "
+            "so git never shares the index or your digests"
+        )
+        return
+    newline = "\r\n" if b"\r\n" in raw else "\n"
+    body = raw.decode("latin-1").rstrip("\r\n")
+    lines = ["# kea", *missing, ""]
+    target.write_bytes((body + newline * 2 + newline.join(lines) if body else newline.join(lines)).encode("latin-1"))
+    written.append(".gitignore")
 
 
 def last_backup(folder: Path) -> Path | None:
@@ -330,6 +353,7 @@ def init(
     force: bool = False,
     git: bool = True,
     add: bool = False,
+    notes: list[str] | None = None,
 ) -> list[str]:
     """
     Make a new brain from the bundled templates, or put back the files an existing brain is missing.
@@ -337,7 +361,8 @@ def init(
     On a folder that is already a brain, only missing files are written. ``force`` overwrites the rest too, after
     copying each one to ``.kea/backup-<time>/``. A folder that holds other files becomes a brain only with ``add``,
     which writes kea's files beside the ones already there and replaces none, or with ``force``. An existing
-    ``.gitignore`` is never replaced: kea's lines are added to it.
+    ``.gitignore`` is never replaced: kea's lines are added to it. kea never writes through a link or into a linked
+    folder: ``force`` replaces a linked file with a regular one, after keeping the link in the backup.
     The example only goes into a new folder. ``git init`` runs only for a new or empty folder.
 
     :param folder: Where to make it; created when missing
@@ -347,9 +372,10 @@ def init(
     :param force: Overwrite files that already exist, keeping a backup of each
     :param git: Run ``git init`` when the folder is new or empty
     :param add: Turn a folder that holds other files into a brain, keeping every file already there
+    :param notes: Collects what the person should know, such as a .gitignore kea could not change
     :returns: The files written, relative to the folder
-    :raises BrainError: When the folder is the home folder or the root, holds other files without add or force, or the
-        example is asked for in an existing brain
+    :raises BrainError: When the folder is the home folder or the root, holds other files without add or force, add
+        and force come together, or the example is asked for in a folder that is not empty
     """
     folder = folder.expanduser().resolve()
     if folder == Path.home().resolve() or folder == Path(folder.anchor):
@@ -358,8 +384,10 @@ def init(
     existing = (folder / MARKER).is_file()
     if example and not fresh:
         raise BrainError(f"{folder} is not empty; the example goes in a new folder: kea init /tmp/demo --example")
-    if add and force and not existing:
-        raise BrainError("choose one: --add keeps every file already there, --force replaces kea's files")
+    if add and force:
+        raise BrainError(
+            "choose one: --add keeps every file already there, --force replaces kea's files after a backup"
+        )
     if not fresh and not existing and not (force or add):
         raise BrainError(
             f"{folder} holds other files and is not a brain: make the brain in a new folder, such as "
@@ -387,19 +415,25 @@ def init(
     backup, n = stamp, 1
     while backup.exists():
         backup, n = stamp.with_name(f"{stamp.name}-{n}"), n + 1
+    notes = notes if notes is not None else []
     for rel, item in planned.items():
         target = folder / rel
+        if not target.parent.resolve().is_relative_to(folder):
+            continue  # a linked folder leads out of the brain, and kea never writes outside it
         text = _render(item.read_text(encoding="utf-8"), values, base)
         if rel == ".gitignore" and (target.exists() or target.is_symlink()):
             if not existing and (add or force):
-                _merge_gitignore(target, text, written)
+                _merge_gitignore(target, text, written, notes)
             continue
-        if target.exists():
+        linked = target.is_symlink()
+        if target.exists() or linked:
             if not force:
                 continue
             saved = backup / rel
             saved.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(target, saved)
+            shutil.copy2(target, saved, follow_symlinks=False)
+            if linked:
+                target.unlink()  # replace the link itself, never the file it points to
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
         written.append(rel)

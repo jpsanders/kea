@@ -2,7 +2,7 @@
 
 Versions follow [semantic versioning](https://semver.org). Tags carry the bare version, such as `1.0.0`.
 
-## 1.0.0 (2026-11-13)
+## 1.0.0 (2026-11-14)
 
 The first release.
 
@@ -30,11 +30,12 @@ The first release.
   credential paths such as `.ssh`, `.env.local`, shell histories and `.pem` files are refused, symbolic links
   included; the index is private to you; requests follow no redirects; agents on MCP can neither add sources nor send
   a packet off the machine unless `kea.toml` allows it.
-  Before release, three independent review agents found 56 issues. Three further rounds, by two more agents each,
+  Before release, three independent review agents found 56 issues. Four further rounds, by two more agents each,
   checked the fixes and found more problems in them. Every confirmed problem is fixed, and each code fix is pinned by
   a test.
 - `kea digest` turns a Claude Code transcript into private readable files in the brain's `digests/` folder.
 - `kea init --example` makes a complete example brain to explore. `kea init` on an existing brain puts back missing
-  files and changes nothing else; `--force` keeps a backup of every file it overwrites.
+  files and changes nothing else; `--add` makes a brain beside files you already have, and `--force` keeps a backup
+  of every file it overwrites.
 - A manual for people and agents: `kea guide`, `kea man`, `man kea` after `kea man --install`.
 - Python 3.15, no dependencies, lazy imports: about 30 ms to start.

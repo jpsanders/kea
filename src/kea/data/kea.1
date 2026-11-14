@@ -227,7 +227,7 @@ kea man
 Show the man page; --install so plain man kea works, --raw for the roff
 .SH FINDING THE BRAIN
 .PP
-kea looks, in order: \fB\-\-brain PATH\fR, then \fB$KEA_BRAIN\fR, then the current folder and each parent, then the default brain named in \fB~/.config/kea/config.toml\fR. The MCP server tries the default before the folders, so a \fBkea.toml\fR in a project an agent works in never takes over. The first real \fBkea init\fR sets the default (\fB\-\-example\fR never does; \fB\-\-default\fR changes it). A folder without \fBkea.toml\fR is never treated as a brain, so notes kea did not make are never touched, and \fBkea init\fR refuses a folder that already holds other files unless you pass \fB\-\-add\fR, which puts kea's files beside yours and replaces none, or \fB\-\-force\fR, which replaces clashing files after a backup of each.
+kea looks, in order: \fB\-\-brain PATH\fR, then \fB$KEA_BRAIN\fR, then the current folder and each parent, then the default brain named in \fB~/.config/kea/config.toml\fR. The MCP server tries the default before the folders, so a \fBkea.toml\fR in a project an agent works in never takes over. The first real \fBkea init\fR sets the default (\fB\-\-example\fR never does; \fB\-\-default\fR changes it). A folder without \fBkea.toml\fR is never treated as a brain, so notes kea did not make are never touched, and \fBkea init\fR refuses a folder that already holds other files unless you pass \fB\-\-add\fR, which puts kea's files beside yours and replaces none, or \fB\-\-force\fR, which replaces clashing files after a backup of each (never both). kea adds its lines to a \fB.gitignore\fR you already have, keeping its encoding and line endings; when it cannot (a link, or UTF-16), it says which lines to add yourself. It never writes through a link or into a linked folder: \fB\-\-force\fR keeps a linked file's link in the backup and puts a regular file in its place.
 .SH EVIDENCE
 .PP
 \fBkea ingest\fR reads, never writes, and redacts before it stores. Each source and where kea looks by default:
@@ -350,7 +350,7 @@ Cursor (~/.cursor/mcp.json) and Gemini CLI (~/.gemini/settings.json) take this J
 .fi
 .RE
 .PP
-Without kea installed, use \fBuvx\fR as the command and \fB\-\-python 3.15 \-\-from git+https://github.com/jpsanders/kea kea mcp\fR as the arguments; the first start downloads it. Set \fBKEA_BRAIN\fR where the client starts servers outside your projects.
+Without kea installed, use \fBuvx\fR as the command and \fB\-\-python 3.15 \-\-from git+https://github.com/jpsanders/kea kea mcp\fR as the arguments; the first start downloads it, and an older uv knows only the 3.15 previews, so update uv first (QUICK START). Set \fBKEA_BRAIN\fR where the client starts servers outside your projects.
 .SH FILES
 .TP
 kea.toml

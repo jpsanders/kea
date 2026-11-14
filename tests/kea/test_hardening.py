@@ -1063,16 +1063,27 @@ def test_gitignore_merge_respects_negations_bytes_and_links(tmp_path: Path) -> N
     assert ".kea/" in merged and "\ndigests/" not in merged
     raw = tmp_path / "raw"
     raw.mkdir()
-    (raw / ".gitignore").write_bytes(b"caf\xe9/\n")
-    assert ".gitignore" not in init(raw, add=True, git=False)
-    assert (raw / ".gitignore").read_bytes() == b"caf\xe9/\n" and (raw / "kea.toml").is_file()
+    (raw / ".gitignore").write_bytes(b"# caf\xe9 build output\r\nbuild/\r\n")
+    assert ".gitignore" in init(raw, add=True, git=False)
+    merged_bytes = (raw / ".gitignore").read_bytes()
+    assert merged_bytes.startswith(b"# caf\xe9 build output\r\nbuild/\r\n\r\n# kea\r\n.kea/\r\n")
+    assert b"digests/\r\n" in merged_bytes and (raw / "kea.toml").is_file()
+    wide = tmp_path / "wide"
+    wide.mkdir()
+    (wide / ".gitignore").write_bytes("build/\n".encode("utf-16"))
+    notes: list[str] = []
+    assert ".gitignore" not in init(wide, add=True, git=False, notes=notes)
+    assert (wide / ".gitignore").read_bytes() == "build/\n".encode("utf-16")
+    assert notes and ".kea/" in notes[0] and "yourself" in notes[0]
     shared = tmp_path / "shared-ignore"
     shared.write_text("shared/\n")
     linked = tmp_path / "linked"
     linked.mkdir()
     os.symlink(shared, linked / ".gitignore")
-    init(linked, add=True, git=False)
+    notes = []
+    init(linked, add=True, git=False, notes=notes)
     assert shared.read_text() == "shared/\n" and (linked / ".gitignore").is_symlink()
+    assert notes and "it is a link" in notes[0]
 
 
 def test_kea_folder_is_private_after_a_forced_init(tmp_path: Path) -> None:
@@ -1178,3 +1189,70 @@ def brain_backup(folder: Path) -> Path:
     found = sorted((folder / ".kea").glob("backup-*"))
     assert len(found) == 1
     return found[0]
+
+
+# ---------------------------------------------------------------- the final gate round
+
+
+def test_add_and_force_are_refused_on_an_existing_brain(brain: Brain) -> None:
+    state = brain.file("STATE.md")
+    state.write_text(state.read_text() + "\nblue tin fact\n")
+    with pytest.raises(BrainError, match="choose one"):
+        init(brain.root, add=True, force=True, git=False)
+    assert "blue tin fact" in state.read_text()
+
+
+def test_init_json_names_the_gitignore_kea_could_not_change(run_json: Callable[..., Any], tmp_path: Path) -> None:
+    folder = tmp_path / "proj"
+    folder.mkdir()
+    (folder / ".gitignore").write_bytes("build/\n".encode("utf-16"))
+    data = run_json("init", str(folder), "--add", "--no-git", "--no-default")
+    assert data["notes"] and "council/briefing/" in data["notes"][0]
+
+
+def test_init_never_writes_through_links(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "README.md").write_text("team readme, do not touch\n")
+    outside = tmp_path / "outside-journal"
+    outside.mkdir()
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "notes.md").write_text("mine\n")
+    os.symlink(shared / "README.md", vault / "README.md")
+    os.symlink(shared / "AGENTS.md", vault / "AGENTS.md")  # dangling
+    os.symlink(outside, vault / "journal")
+    init(vault, add=True, git=False)
+    assert (shared / "README.md").read_text() == "team readme, do not touch\n"
+    assert not (shared / "AGENTS.md").exists() and list(outside.iterdir()) == []
+    forced = tmp_path / "forced"
+    forced.mkdir()
+    (forced / "notes.md").write_text("mine\n")
+    os.symlink(shared / "README.md", forced / "README.md")
+    init(forced, force=True, git=False)
+    assert (shared / "README.md").read_text() == "team readme, do not touch\n"
+    assert not (forced / "README.md").is_symlink() and (forced / "README.md").is_file()
+    kept = next((forced / ".kea").glob("backup-*")) / "README.md"
+    assert kept.is_symlink() and kept.resolve() == (shared / "README.md").resolve()
+
+
+@pytest.mark.parametrize(
+    "roster",
+    [
+        b"# notas: n\xe3o\n[[seat]]\nname = 'x'\nprovider = 'openai'\nmodel = 'm'\n",
+        b"[[seat]]\nname = 'x'\nprovider = 'openai'\nmodel = 'm'\nmax_tokens = inf\n",
+        b"[[seat]]\nname = 'x'\nprovider = 'openai'\nmodel = 'm'\ntimeout = -1\n",
+        b"[rate_limits]\nopenai = inf\n[[seat]]\nname = 'x'\nprovider = 'openai'\nmodel = 'm'\n",
+    ],
+)
+def test_a_broken_roster_never_crashes_check_or_status(run: Run, brain: Brain, roster: bytes) -> None:
+    brain.file("council", "roster.toml").write_bytes(roster)
+    code, out, err = run("--brain", str(brain.root), "check")
+    assert "Traceback" not in err and "Error:" not in err
+    code, out, err = run("--brain", str(brain.root), "status")
+    assert code == 0, err
+    server = mcp.Server(str(brain.root))
+    reply = server.handle(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "check", "arguments": {}}}
+    )
+    assert reply is not None and not reply["result"]["isError"]

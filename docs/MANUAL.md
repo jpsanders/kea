@@ -162,7 +162,10 @@ brain named in `~/.config/kea/config.toml`. The MCP server tries the default bef
 project an agent works in never takes over. The first real `kea init` sets the default (`--example` never does;
 `--default` changes it). A folder without `kea.toml` is never treated as a brain, so notes kea did not make are never
 touched, and `kea init` refuses a folder that already holds other files unless you pass `--add`, which puts kea's
-files beside yours and replaces none, or `--force`, which replaces clashing files after a backup of each.
+files beside yours and replaces none, or `--force`, which replaces clashing files after a backup of each (never both).
+kea adds its lines to a `.gitignore` you already have, keeping its encoding and line endings; when it cannot (a link,
+or UTF-16), it says which lines to add yourself. It never writes through a link or into a linked folder: `--force`
+keeps a linked file's link in the backup and puts a regular file in its place.
 
 ## EVIDENCE
 
@@ -282,8 +285,8 @@ command there.
 ```
 
 Without kea installed, use `uvx` as the command and `--python 3.15 --from git+https://github.com/jpsanders/kea kea
-mcp` as the arguments; the first start downloads it. Set `KEA_BRAIN` where the client starts servers outside your
-projects.
+mcp` as the arguments; the first start downloads it, and an older uv knows only the 3.15 previews, so update uv first
+(QUICK START). Set `KEA_BRAIN` where the client starts servers outside your projects.
 
 ## FILES
 

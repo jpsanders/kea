@@ -9,6 +9,7 @@ URL, so an error message can never echo one. A key is never sent over plain HTTP
 
 import http.client
 import json
+import math
 import os
 import re
 import time
@@ -64,6 +65,18 @@ class ProviderError(Exception):
     """A model could not be reached or answered with an error."""
 
 
+def _number(raw: dict[str, Any], key: str, default: float, low: float, high: float) -> float:
+    """Read a number from a seat's table, finite and within its range."""
+    value = raw.get(key, default)
+    try:
+        number = float(value) if not isinstance(value, bool) else float("nan")
+    except TypeError, ValueError:
+        number = float("nan")
+    if not math.isfinite(number) or not low <= number <= high:
+        raise ProviderError(f"seat {raw.get('name')!r}: {key} must be a number from {low:g} to {high:g}, not {value!r}")
+    return number
+
+
 @dataclass(frozen=True)
 class Seat:
     """One seat on the council: who it is, what lens it brings, and which model fills it."""
@@ -115,9 +128,9 @@ class Seat:
             base_url=str(raw.get("base_url") or base).rstrip("/"),
             key_env=str(raw["key_env"]) if raw.get("key_env") else key_env,
             wire=str(raw.get("wire") or wire),
-            max_tokens=int(raw.get("max_tokens", 8000)),
-            temperature=float(raw.get("temperature", 0.35)),
-            timeout=int(raw.get("timeout", 600)),
+            max_tokens=int(_number(raw, "max_tokens", 8000, 1, 1_000_000)),
+            temperature=_number(raw, "temperature", 0.35, 0, 2),
+            timeout=int(_number(raw, "timeout", 600, 1, 3600)),
             enabled=bool(raw.get("enabled", True)),
             note=str(raw.get("note", "")),
             remote=bool(raw.get("remote", False)),

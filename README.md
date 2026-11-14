@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">
-    <img alt="kea: a second brain that checks its facts" src="docs/images/banner-light.png" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jpsanders/kea/main/docs/images/banner-dark.png">
+    <img alt="kea: a second brain that checks its facts" src="https://raw.githubusercontent.com/jpsanders/kea/main/docs/images/banner-light.png" width="100%">
   </picture>
 </p>
 
@@ -9,13 +9,13 @@
   <a href="https://github.com/jpsanders/kea/actions/workflows/dev.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/jpsanders/kea/dev.yml?branch=main&label=CI&logo=github"></a>
   <a href="https://github.com/jpsanders/kea/releases/latest"><img alt="Release 1.0.0" src="https://img.shields.io/badge/release-1.0.0-a95719"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.15" src="https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white"></a>
-  <a href="pyproject.toml"><img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-2e7d32"></a>
-  <a href="#use-it-with-your-ai-agent"><img alt="MCP server" src="https://img.shields.io/badge/MCP-server-1c1611"></a>
-  <a href="#use-it-with-your-ai-agent"><img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-a95719"></a>
-  <a href="skills/"><img alt="Agent skills" src="https://img.shields.io/badge/agent-skills-1c1611"></a>
+  <a href="https://github.com/jpsanders/kea/blob/main/pyproject.toml"><img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-2e7d32"></a>
+  <a href="https://github.com/jpsanders/kea#use-it-with-your-ai-agent"><img alt="MCP server" src="https://img.shields.io/badge/MCP-server-1c1611"></a>
+  <a href="https://github.com/jpsanders/kea#use-it-with-your-ai-agent"><img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude%20Code-plugin-a95719"></a>
+  <a href="https://github.com/jpsanders/kea/tree/main/skills"><img alt="Agent skills" src="https://img.shields.io/badge/agent-skills-1c1611"></a>
   <a href="https://mypy-lang.org/"><img alt="mypy strict" src="https://img.shields.io/badge/mypy-strict-2a6db2"></a>
   <a href="https://github.com/psf/black"><img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000"></a>
-  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue"></a>
+  <a href="https://github.com/jpsanders/kea/blob/main/LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue"></a>
   <a href="https://github.com/jpsanders/kea/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/jpsanders/kea"></a>
   <a href="https://github.com/jpsanders/kea/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/jpsanders/kea?style=flat&logo=github&color=a95719"></a>
 </p>
@@ -150,7 +150,7 @@ kea skill install        # into ~/.claude/skills (Claude Code, OpenCode) and ~/.
 /plugin install kea@kea
 ```
 
-The plugin starts its MCP server with `uvx --python 3.15`, so update uv first, as in [Install](#install).
+The plugin starts its MCP server with `uvx --python 3.15`, so update uv first, as in Install below.
 
 **MCP server** with 25 tools (search, show, brain_status, log_entry, record_fact, decide, predict, score_prediction,
 roadmap_add, council_run and more), five resources and three prompts:
@@ -172,7 +172,8 @@ args = ["mcp"]
 
 The JSON works for Cursor (`~/.cursor/mcp.json`) and Gemini CLI (`~/.gemini/settings.json`). For Claude Desktop, put
 the full path from `which kea` as the command, because it starts servers without your shell's PATH. Without kea
-installed, use `uvx` with `--python 3.15 --from git+https://github.com/jpsanders/kea kea mcp`.
+installed, use `uvx` with `--python 3.15 --from git+https://github.com/jpsanders/kea kea mcp`, after updating uv as in
+Install.
 
 An agent can read and keep the ledger, but two things stay yours: it can only rescan sources you added in a terminal,
 and it can only send a council packet off your machine if your `kea.toml` says `[council] agents_may_send = true`.
@@ -218,7 +219,7 @@ Then `kea man --install` makes `man kea` work.
 | `kea mcp` / `kea skill install` | Agents |
 | `kea guide` / `kea man` | The full manual, for people and agents |
 
-Everything is in the [manual](docs/MANUAL.md): `kea guide` prints it, `man kea` shows it.
+Everything is in the [manual](https://github.com/jpsanders/kea/blob/main/docs/MANUAL.md): `kea guide` prints it, `man kea` shows it.
 
 ## Privacy
 
@@ -228,7 +229,7 @@ shell histories or `credentials` (a symbolic link is judged by where it points, 
 folder you ingest), and redacts anything shaped like a key or a token before storing it and before a packet leaves.
 What you write into the ledger loses only unmistakable key shapes, so your own words stay as you wrote them. The only
 thing that ever leaves your machine is a council packet, and `kea council` asks first, naming every host. API keys
-travel in headers, never in URLs, and no request follows a redirect. More in [SECURITY.md](SECURITY.md).
+travel in headers, never in URLs, and no request follows a redirect. More in [SECURITY.md](https://github.com/jpsanders/kea/blob/main/SECURITY.md).
 
 ## Performance
 
@@ -255,7 +256,7 @@ the sheepdog that guards your machine; kea guards your thinking.
 
 ## Contributing
 
-Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Built on
+Issues and pull requests are welcome; see [CONTRIBUTING.md](https://github.com/jpsanders/kea/blob/main/CONTRIBUTING.md). Built on
 [python-package-template](https://github.com/jpsanders/python-package-template).
 
 ## Licence
