@@ -112,19 +112,29 @@ def fts_query(text: str, any_word: bool = False) -> str:
     """
     Turn free text into a safe FTS5 query: every word quoted, so punctuation never breaks the syntax.
 
+    For every word (the default) a token like ``D-0002`` or ``Bob's`` becomes a phrase and question words are dropped,
+    so ``what did we decide about pricing`` asks for ``decide pricing``. For any word, single letters and question words
+    are dropped too, so a possessive's ``s`` never matches on its own.
+
     :param text: What the person typed; ``"a phrase"`` stays a phrase
     :param any_word: Match any word instead of every word
     :returns: The FTS5 query, empty when the text has no words
     """
-    terms = []
+    terms: list[str] = []
+    singles: list[str] = []
     for phrase, word in re.findall(r'"([^"]+)"|(\S+)', text):
         tokens = re.findall(r"\w+", phrase or word)
-        if phrase and tokens:
+        if not tokens:
+            continue
+        if any_word and not phrase:
+            singles += tokens
+        elif len(tokens) > 1:
             terms.append('"' + " ".join(tokens) + '"')
         else:
-            terms += [f'"{t}"' for t in tokens]
-    meaningful = [t for t in terms if " " in t or (t.strip('"').lower() not in STOPWORDS and len(t) > 3)]
-    return (" OR " if any_word else " ").join(meaningful or terms)
+            singles.append(tokens[0])
+    plain = [t for t in singles if t.lower() not in STOPWORDS and (len(t) > 1 or not any_word)]
+    chosen = plain or ([] if terms else singles)
+    return (" OR " if any_word else " ").join(terms + [f'"{t}"' for t in chosen])
 
 
 class Store:
@@ -381,13 +391,18 @@ class Store:
                 f"FROM items_fts JOIN items i ON i.id = items_fts.rowid WHERE items_fts MATCH ?{extra} "
                 "ORDER BY bm25(items_fts, 3.0, 1.0) LIMIT ?"
             )
-            found = [{**dict(r), "partial": any_word} for r in self.db.execute(sql, [match, *params, limit])]
+            strict = fts_query(query)
             wider = fts_query(query, any_word=True)
-            if len(found) < limit and not any_word and wider != match:
-                seen = {r["id"] for r in found}
-                more = self.db.execute(sql, [wider, *params, limit]).fetchall()
-                found += [{**dict(r), "partial": True} for r in more if r["id"] not in seen][: limit - len(found)]
-            return found
+            first = self.db.execute(sql, [strict, *params, limit]).fetchall() if strict else []
+            whole = {r["id"] for r in first}
+            if any_word:
+                rows = self.db.execute(sql, [wider, *params, limit]).fetchall() if wider else []
+            else:
+                rows = list(first)
+                if len(rows) < limit and wider and wider != strict:
+                    more = self.db.execute(sql, [wider, *params, limit]).fetchall()
+                    rows += [r for r in more if r["id"] not in whole][: limit - len(rows)]
+            return [{**dict(r), "partial": r["id"] not in whole} for r in rows]
         else:
             words = re.findall(r"\w+", query)
             if not words:

@@ -30,7 +30,7 @@ Plain Markdown in a folder you own. One Python package with no dependencies. A C
 and a Claude Code plugin.
 
 ```sh
-uv tool install --python 3.15 git+https://github.com/jpsanders/kea      # uv fetches Python 3.15 if missing
+uv self update && uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # fetches Python 3.15
 kea init ~/tidewater --example && cd ~/tidewater && kea status
 ```
 

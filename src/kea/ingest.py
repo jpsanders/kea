@@ -330,10 +330,16 @@ def _sessions(
     deny: list[str],
     sig: str,
     force: bool,
+    root: Path | None = None,
 ) -> set[str]:
     seen: set[str] = set()
     for path in files:
-        if is_denied(path, deny):
+        try:
+            real = path.resolve(strict=True)
+        except OSError:
+            continue
+        outside = path.is_symlink() and root is not None and not real.is_relative_to(root)
+        if is_denied(path, deny) or is_denied(real, deny) or outside:
             report.skipped += 1
             continue
         if store.is_forgotten(kind, str(path)):
@@ -814,7 +820,13 @@ def _readable(path: Path, root: Path, deny: list[str], outside_links: bool = Fal
     return outside_links or not path.is_symlink() or target.is_relative_to(root.resolve())
 
 
-def text_files(folder: Path, deny: list[str], skip: tuple[Path, ...] = (), outside_links: bool = False) -> list[Path]:
+def text_files(
+    folder: Path,
+    deny: list[str],
+    skip: tuple[Path, ...] = (),
+    outside_links: bool = False,
+    refused: list[Path] | None = None,
+) -> list[Path]:
     """
     List the text files under a folder, leaving out hidden, build and denied paths, and links that point outside it.
 
@@ -822,13 +834,19 @@ def text_files(folder: Path, deny: list[str], skip: tuple[Path, ...] = (), outsi
     :param deny: Extra path patterns to leave out
     :param skip: Folders to leave out entirely
     :param outside_links: Accept links that point outside the folder (the brain's own files may live elsewhere)
+    :param refused: Collects the text files left out for a deny rule or a link leading outside
     :returns: The files
     """
     out = []
     for root, dirs, files in os.walk(folder):
         here = Path(root)
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS and (here / d) not in skip)
-        out += [here / name for name in sorted(files) if _readable(here / name, folder, deny, outside_links)]
+        for name in sorted(files):
+            path = here / name
+            if _readable(path, folder, deny, outside_links):
+                out.append(path)
+            elif refused is not None and not name.startswith(".") and path.suffix.lower() in TEXT_SUFFIXES:
+                refused.append(path)
     return out
 
 
@@ -844,7 +862,9 @@ def _docs(
         found = text_files(folder, deny, skip, outside_links=True)
         files = [p for p in found if str(p.relative_to(folder)) not in BRAIN_BOILERPLATE]
     else:
-        files = text_files(folder, deny)
+        refused: list[Path] = []
+        files = text_files(folder, deny, refused=refused)
+        report.skipped += len(refused)
     kind = "brain" if platform == "brain" else "docs"
     seen = set()
     for path in files:
@@ -910,25 +930,26 @@ def ingest(
     if target is None:
         raise ValueError(f"{kind} needs a path: kea ingest {kind} <path>")
     deny = _deny(brain)
-    if is_denied(target, deny):
-        raise ValueError(f"refused: {target} names a credential store")
+    for candidate in (target, target.resolve()):
+        if is_denied(candidate):
+            raise ValueError(f"refused: {candidate} names a credential store")
+        if is_denied(candidate, deny):
+            raise ValueError(f"refused: {candidate} is covered by your [ingest] deny in kea.toml")
     target = target.resolve()
     if not target.exists():
         raise ValueError(f"not found: {target}")
-    if is_denied(target, deny):
-        raise ValueError(f"refused: {target} names a credential store")
     if path and revive:
         store.remember(kind, str(target))
     report = Report(kind, str(target))
     sig = _signature(brain)
     if kind == "claude-code":
         files = [target] if target.is_file() else sorted(target.glob("*/*.jsonl"))
-        seen = _sessions(store, report, kind, files, parse_claude_code, deny, sig, force)
+        seen = _sessions(store, report, kind, files, parse_claude_code, deny, sig, force, target)
         if target.is_dir():
             report.dropped = store.drop_missing(kind, seen, str(target))
     elif kind == "codex":
         files = [target] if target.is_file() else sorted(target.rglob("rollout-*.jsonl"))
-        seen = _sessions(store, report, kind, files, parse_codex, deny, sig, force)
+        seen = _sessions(store, report, kind, files, parse_codex, deny, sig, force, target)
         if target.is_dir():
             report.dropped = store.drop_missing(kind, seen, str(target))
     elif kind == "opencode":
@@ -952,10 +973,26 @@ def ingest_known(brain: Brain, store: Store, force: bool = False) -> list[Report
     :param force: Read everything again
     :returns: One report per source
     """
-    reports = [refresh_brain(brain, store, force)]
+    return [refresh_brain(brain, store, force), *rescan(brain, store, store.roots(), force)]
+
+
+def rescan(brain: Brain, store: Store, roots: list[tuple[str, str]], force: bool = False) -> list[Report]:
+    """
+    Scan known roots again, one report each.
+
+    A root a deny rule now covers is dropped with everything read from it, and a root that fails is reported without
+    stopping the others.
+
+    :param brain: The brain
+    :param store: Its index
+    :param roots: Pairs of adapter and path, as :meth:`Store.roots` gives them
+    :param force: Read everything again
+    :returns: One report per root
+    """
+    reports = []
     deny = _deny(brain)
-    for kind, path in store.roots():
-        if is_denied(path, deny):
+    for kind, path in roots:
+        if is_denied(path) or is_denied(path, deny):
             reports.append(Report(kind, path, dropped=store.drop_root(kind, path)))
             continue
         try:

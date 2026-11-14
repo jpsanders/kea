@@ -159,7 +159,7 @@ def _index_error(exc: Exception) -> str:
     if "readonly" in text or "read-only" in text or "unable to open" in text or "permission" in text:
         return f"the search index cannot be written here ({exc}): check who owns the brain's .kea folder"
     if "malformed" in text or "not a database" in text or "corrupt" in text:
-        return f"the search index is damaged ({exc}); delete the brain's .kea folder and run kea ingest to rebuild it"
+        return f"the search index is damaged ({exc}); delete .kea/index.sqlite and its -wal and -shm files, then ingest"
     return f"the search index could not be used ({exc})"
 
 
@@ -184,7 +184,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     """
     folder = Path(args.path or ".").expanduser().resolve()
     existed = (folder / brain_mod.MARKER).is_file()
-    written = brain_mod.init(folder, args.name, args.owner, args.example, args.force, not args.no_git)
+    written = brain_mod.init(folder, args.name, args.owner, args.example, args.force, not args.no_git, args.add)
+    backup = brain_mod.last_backup(folder) if args.force and existed else None
     default = None
     current = brain_mod.default_brain()
     if args.default or (not args.no_default and not args.example and current is None):
@@ -197,6 +198,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         "default_brain": str(current) if current else None,
         "example": args.example,
         "repaired": existed and not args.force,
+        "backup": str(backup) if backup else None,
     }
 
     def human(p: Paint) -> None:
@@ -207,6 +209,10 @@ def cmd_init(args: argparse.Namespace) -> int:
                 print(f"  it is now your default brain {p.dim('(' + _home(default) + ')')}")
             return
         print(f"{p.accent('kea')} made a brain in {p.bold(_home(str(folder)))} ({_plural(len(written), 'file')})")
+        if args.add:
+            print("  every file that was already there is kept; kea's lines were added to an existing .gitignore")
+        if backup:
+            print(f"  the files it replaced are in {_home(str(backup))}")
         if default:
             print(f"  it is now your default brain {p.dim('(' + _home(default) + ')')}")
         elif current and current.resolve() != folder:
@@ -621,6 +627,8 @@ def cmd_council(args: argparse.Namespace) -> int:
         data = {"plan": args.slug, "packet_bytes": size, "seats": rows}
 
         def human(p: Paint) -> None:
+            for error in council.roster(brain).errors:
+                print(p.warn(f"roster: {error}"))
             if not size:
                 print(f"no packet yet: kea brief {args.slug}")
             if not rows:
@@ -638,8 +646,7 @@ def cmd_council(args: argparse.Namespace) -> int:
         if not sys.stdin.isatty():
             raise CouncilError(f"this sends the packet to {', '.join(outside)}; add --yes to confirm")
         if not _confirm(f"send {size:,} bytes of your brain to {', '.join(outside)}? [y/N] "):
-            print("nothing sent", file=sys.stderr)
-            return 1
+            raise CouncilError("nothing sent: you said no")
     manifest = council.run(brain, args.slug, args.seat or None, args.resume)
 
     def show(p: Paint) -> None:
@@ -693,8 +700,7 @@ def cmd_seats(args: argparse.Namespace) -> int:
         if not sys.stdin.isatty():
             raise CouncilError(f"--probe sends your API key to custom endpoints ({', '.join(custom)}); add --yes")
         if not _confirm(f"--probe sends your API key to {', '.join(custom)}. Go ahead? [y/N] "):
-            print("nothing sent", file=sys.stderr)
-            return 1
+            raise CouncilError("nothing sent: you said no")
     if args.probe:
         rows = council.seats(brain, True)
 
@@ -739,7 +745,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         for r in reports:
             line = f"{r.read} read, {r.unchanged} unchanged"
             if r.skipped:
-                line += f", {r.skipped} skipped (denied)"
+                line += f", {r.skipped} skipped (denied, too big, or linked outside)"
             if r.forgotten:
                 line += f", {r.forgotten} forgotten"
             if r.dropped:
@@ -1054,7 +1060,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="the brain's name")
     p.add_argument("--owner", help="whose brain it is: the person 'waiting for' means")
     p.add_argument("--example", action="store_true", help="fill it with a made up example brain to explore")
-    p.add_argument("--force", action="store_true", help="overwrite existing files")
+    p.add_argument("--force", action="store_true", help="overwrite kea's files, backing each one up first")
+    p.add_argument(
+        "--add", action="store_true", help="add kea's files to a folder that holds other files, replacing none"
+    )
     p.add_argument("--no-git", action="store_true", help="do not run git init")
     p.add_argument("--default", action="store_true", help="make it your default brain even if you have one")
     p.add_argument("--no-default", action="store_true", help="never make it your default brain")

@@ -274,6 +274,17 @@ def parse_date(text: str, base: date | None = None) -> date | None:
     return None
 
 
+def last_backup(folder: Path) -> Path | None:
+    """
+    Find the newest backup ``kea init --force`` made in a brain.
+
+    :param folder: The brain folder
+    :returns: The backup folder, or None
+    """
+    found = sorted((folder / INDEX_DIR).glob("backup-*"), key=lambda p: p.stat().st_mtime)
+    return found[-1] if found else None
+
+
 def _render(text: str, values: dict[str, str], base: date) -> str:
     def swap(m: re.Match[str]) -> str:
         key = m[1]
@@ -302,12 +313,15 @@ def init(
     example: bool = False,
     force: bool = False,
     git: bool = True,
+    add: bool = False,
 ) -> list[str]:
     """
     Make a new brain from the bundled templates, or put back the files an existing brain is missing.
 
     On a folder that is already a brain, only missing files are written. ``force`` overwrites the rest too, after
-    copying each one to ``.kea/backup-<time>/``, and is needed to turn a folder that holds other files into a brain.
+    copying each one to ``.kea/backup-<time>/``. A folder that holds other files becomes a brain only with ``add``,
+    which writes kea's files beside the ones already there and replaces none, or with ``force``. An existing
+    ``.gitignore`` is never replaced: kea's lines are added to it.
     The example only goes into a new folder. ``git init`` runs only for a new or empty folder.
 
     :param folder: Where to make it; created when missing
@@ -316,9 +330,10 @@ def init(
     :param example: Fill it with the example brain, a made up coffee roastery, to explore
     :param force: Overwrite files that already exist, keeping a backup of each
     :param git: Run ``git init`` when the folder is new or empty
+    :param add: Turn a folder that holds other files into a brain, keeping every file already there
     :returns: The files written, relative to the folder
-    :raises BrainError: When the folder is the home folder or the root, holds other files without force, or the example
-        is asked for in an existing brain
+    :raises BrainError: When the folder is the home folder or the root, holds other files without add or force, or the
+        example is asked for in an existing brain
     """
     folder = folder.expanduser().resolve()
     if folder == Path.home().resolve() or folder == Path(folder.anchor):
@@ -327,10 +342,10 @@ def init(
     existing = (folder / MARKER).is_file()
     if example and existing:
         raise BrainError(f"{folder} is already a brain; the example goes in a new folder: kea init /tmp/demo --example")
-    if not fresh and not existing and not force:
+    if not fresh and not existing and not (force or add):
         raise BrainError(
             f"{folder} holds other files and is not a brain: make the brain in a new folder, such as "
-            f"{folder / 'brain'}, or pass --force to add kea's files here (any file it replaces is backed up first)"
+            f"{folder / 'brain'}, or pass --add to put kea's files beside yours (none of yours is replaced)"
         )
     base = today()
     values = {
@@ -354,6 +369,16 @@ def init(
         backup, n = stamp.with_name(f"{stamp.name}-{n}"), n + 1
     for rel, item in planned.items():
         target = folder / rel
+        text = _render(item.read_text(encoding="utf-8"), values, base)
+        if rel == ".gitignore" and target.is_file():
+            current = target.read_text(encoding="utf-8")
+            have = {line.strip() for line in current.splitlines()}
+            missing = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
+            missing = [line for line in missing if line.strip() not in have]
+            if missing:
+                target.write_text(current.rstrip("\n") + "\n\n# kea\n" + "\n".join(missing) + "\n", encoding="utf-8")
+                written.append(rel)
+            continue
         if target.exists():
             if not force:
                 continue
@@ -361,7 +386,7 @@ def init(
             saved.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(target, saved)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(_render(item.read_text(encoding="utf-8"), values, base), encoding="utf-8")
+        target.write_text(text, encoding="utf-8")
         written.append(rel)
     (folder / INDEX_DIR).mkdir(mode=0o700, exist_ok=True)
     git_bin = shutil.which("git")

@@ -238,7 +238,7 @@ def _council_run(brain: Brain, args: dict[str, Any]) -> Any:
 def _ingest(brain: Brain, args: dict[str, Any]) -> Any:
     from pathlib import Path
 
-    from kea.ingest import ingest, ingest_known
+    from kea.ingest import ingest_known, rescan
     from kea.store import Store
 
     with Store(brain.index_path) as store:
@@ -251,7 +251,7 @@ def _ingest(brain: Brain, args: dict[str, Any]) -> Any:
             raise ValueError(
                 "agents may only rescan sources the user added: the user adds new ones with kea ingest in a terminal"
             )
-        return [ingest(brain, store, kind, path, revive=False).as_dict() for path in wanted]
+        return [r.as_dict() for r in rescan(brain, store, [(kind, path) for path in wanted])]
 
 
 def _effort(brain: Brain, args: dict[str, Any]) -> Any:

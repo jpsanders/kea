@@ -173,7 +173,11 @@ def parse_entries(lines: list[str]) -> list[Entry]:
             m = HEADING.match(line)
             if m:
                 sep = "|" if re.match(r"^### [A-Z]-\d+\s*\|", line) else "·"
-                head = [p.strip() for p in SPLITS[sep].split(m["rest"])] if m["rest"] else []
+                rest = m["rest"]
+                parts = SPLITS[sep].split(rest) if rest else []
+                if len(parts) == 1 and re.search(r"\s(?:·|\|)\s", rest):
+                    parts = re.split(r"\s(?:·|\|)\s", rest)  # a heading that mixes both separators
+                head = [p.strip() for p in parts]
                 current = Entry(id=m["id"], head=head, start=i, sep=sep, heading=line)
             continue
         if current is not None:

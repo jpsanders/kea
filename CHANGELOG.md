@@ -30,8 +30,8 @@ The first release.
   credential paths such as `.ssh`, `.env.local`, shell histories and `.pem` files are refused, symbolic links
   included; the index is private to you; requests follow no redirects; agents on MCP can neither add sources nor send
   a packet off the machine unless `kea.toml` allows it.
-  Three independent reviews before release found 56 issues; each is fixed and pinned by a test, and two more agents
-  verified the fixes and found 25 regressions, also fixed and tested.
+  Three independent reviews before release found 56 issues. Two further rounds of verification, by two more agents
+  each, found 41 problems in the fixes and 18 fixes that were incomplete. Every one is fixed and pinned by a test.
 - `kea digest` turns a Claude Code transcript into private readable files in the brain's `digests/` folder.
 - `kea init --example` makes a complete example brain to explore. `kea init` on an existing brain puts back missing
   files and changes nothing else; `--force` keeps a backup of every file it overwrites.

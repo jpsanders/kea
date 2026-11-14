@@ -8,9 +8,10 @@ reaches the index, and never leaves the machine in a packet.
 
 Two strengths. The precise set matches only unmistakable shapes: a provider's key prefix, a private key block, a
 password inside a URL, an ``UPPER_CASE_API_KEY=`` assignment. It is what kea applies to what people write into the
-ledger, so ordinary words are never touched. The full set adds ``name: value`` pairs whose name is a credential word
-(``password``, ``secret``, ``token``, ``api_key``...), matched as whole words so ``Author`` or ``Tokenizer`` stay as
-they are; it is what the index and the packets get. Every pattern runs in linear time, whatever the input.
+ledger, so ordinary words are never touched. The full set adds every ``name: value`` pair whose name is a credential
+word (``password``, ``secret``, ``token``, ``api_key``...), matched as whole words so ``Author`` or ``Tokenizer`` stay
+as they are, and Bearer, Basic, Cookie and ``-u user:pass`` forms; it is what the index and the packets get. Pairs are
+found inside other values too, such as a URL's query. Every pattern runs in linear time, whatever the input.
 """
 
 import base64
@@ -103,29 +104,39 @@ SHAPES = (
     re.compile(r"discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_\-]{20,}"),
     re.compile(r'"type"\s*:\s*"service_account"'),
     re.compile(r"(?<=://)[^/\s:@]{0,64}:(?P<v>[^/\s@]{1,128})(?=@)"),
-    re.compile(r"(?<!\S)(?:-u|--user)\s+[^\s:]{1,64}:(?P<v>\S{1,128})"),
-    re.compile(
-        r"(?<![A-Za-z0-9_])(?:[A-Z0-9]+_)*(?:API_?KEY|SECRET(?:_ACCESS)?(?:_KEY)?|PASSWORD|PASSWD|PASSPHRASE|"
-        r"(?:AUTH_|ACCESS_|REFRESH_|API_|BOT_)?TOKEN|PRIVATE_KEY|CLIENT_SECRET)(?:_[A-Z0-9]+)*"
-        r"[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;]{8,})"
-    ),
 )
 
 # Credential words, matched as whole segments of a name: refresh_token and x-api-key match, tokenizer does not.
 _WORDS = {"password", "passwd", "passphrase", "secret", "secrets", "token", "credential", "credentials", "apikey"}
 _PAIRS = {("api", "key"), ("access", "key"), ("private", "key"), ("secret", "key"), ("client", "secret")}
+# A name ending in one of these holds something about a secret, not the secret: secret_name, token_url, api_key_id.
+_ABOUT = {
+    "name", "names", "path", "paths", "file", "files", "dir", "url", "uri", "id", "ids", "type", "count", "len",
+    "length", "size", "env", "var", "field", "header", "prefix", "suffix", "format", "expiry", "expires", "ttl",
+    "limit", "scope", "scopes", "label", "hint", "endpoint", "host", "version", "kind", "mode", "policy", "rotation",
+}  # fmt: skip
 
-# Name and value pairs; the name is judged in code. Bearer and Basic values are checked for their shape.
-NAMED = re.compile(r"(?<![\w.\-])(?P<name>[A-Za-z_][\w.\-]{0,63})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;]{8,})")
+# name: value and name=value. A name is judged in code and the scan never consumes a value it keeps, so a pair inside
+# another value (a URL query, a JDBC string) is still found. UPPER is the env style, used for the ledger too.
+NAMED = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Za-z_][\w.\-]{0,63})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;&]{8,512})")
+UPPER = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Z][A-Z0-9_]{0,63})[\"']?\s*[:=]\s*[\"']?(?P<v>[^\s\"',;&]{8,512})")
+_VALUE_END = frozenset(" \t\r\n\"',;&")
 BEARER = re.compile(r"(?i)\b(?:bearer|token)\s+(?P<v>[A-Za-z0-9_\-.=~+/]{20,})")
 BASIC = re.compile(r"(?i)\bbasic\s+(?P<v>[A-Za-z0-9+/]{8,}={0,2})(?![\w\-])")
-GENERIC = (NAMED, BEARER, BASIC)
+COOKIE = re.compile(r"(?im)^\s*(?:set-)?cookie:\s*(?P<v>\S[^\r\n]{7,})")
+USER_FLAG = re.compile(r"(?<!\S)(?:-u|--user)\s+(?P<user>[^\s:@/]{1,64}):(?P<v>[^\s/]{6,128})")
+GENERIC = (BEARER, BASIC, COOKIE, USER_FLAG)
 
 
 def _secret_name(name: str) -> bool:
-    parts = [p for p in re.split(r"[_.\-]+|(?<=[a-z])(?=[A-Z])", name) if p]
-    lower = [p.lower() for p in parts]
-    return any(p in _WORDS for p in lower) or any(pair in _PAIRS for pair in zip(lower, lower[1:]))
+    parts = [p.lower() for p in re.split(r"[_.\-]+|(?<=[a-z])(?=[A-Z])", name) if p]
+    if not parts or parts[-1] in _ABOUT:
+        return False
+    return any(p in _WORDS for p in parts) or any(pair in _PAIRS for pair in zip(parts, parts[1:]))
+
+
+def _secret_value(value: str) -> bool:
+    return "(" not in value and not value.startswith(("/", "./", "~", "$", "%", "{", "<"))
 
 
 def _looks_like_token(value: str) -> bool:
@@ -140,18 +151,43 @@ def _basic_credentials(value: str) -> bool:
     return b":" in decoded and all(32 <= b < 127 for b in decoded)
 
 
+def _keep(match: re.Match[str]) -> bool:
+    """Tell whether a match of a shape that needs judging is not a secret after all."""
+    value = match.group("v")
+    if match.re is BEARER:
+        return not _looks_like_token(value)
+    if match.re is BASIC:
+        return not _basic_credentials(value)
+    if match.re is USER_FLAG:
+        return value.isdigit() or value == match.group("user")
+    return False
+
+
 def _swap(match: re.Match[str]) -> str:
-    if match.re is NAMED and not _secret_name(match.group("name")):
-        return match.group(0)
     if "v" not in match.re.groupindex or match.group("v") is None:
         return MARKER
-    value = match.group("v")
-    if match.re is BEARER and not _looks_like_token(value):
-        return match.group(0)
-    if match.re is BASIC and not _basic_credentials(value):
+    if _keep(match):
         return match.group(0)
     whole, start = match.group(0), match.start("v") - match.start()
-    return whole[:start] + MARKER + whole[start + len(value) :]
+    return whole[:start] + MARKER + whole[start + len(match.group("v")) :]
+
+
+def _pairs(pattern: re.Pattern[str], text: str) -> tuple[str, int]:
+    out: list[str] = []
+    pos = count = 0
+    while (m := pattern.search(text, pos)) is not None:
+        out.append(text[pos : m.start("v")])
+        if _secret_name(m.group("name")) and _secret_value(m.group("v")):
+            end = m.end("v")
+            while end < len(text) and text[end] not in _VALUE_END:
+                end += 1  # a value longer than the pattern's bound is still hidden whole
+            out.append(MARKER)
+            pos = end
+            count += 1
+        else:
+            pos = m.start("v")
+    out.append(text[pos:])
+    return "".join(out), count
 
 
 def redact_count(text: str, generic: bool = True) -> tuple[str, int]:
@@ -159,7 +195,8 @@ def redact_count(text: str, generic: bool = True) -> tuple[str, int]:
     Replace every credential shaped substring with ``[REDACTED]`` and count them.
 
     :param text: Any text
-    :param generic: Also replace values of ``name: value`` pairs named like credentials; off for the ledger
+    :param generic: Also judge every ``name: value`` pair and header shape; off for the ledger, which only loses
+        unmistakable shapes and ``UPPER_CASE_SECRET=`` assignments
     :returns: The text with secrets replaced, and how many were replaced
     """
     if not text:
@@ -174,7 +211,8 @@ def redact_count(text: str, generic: bool = True) -> tuple[str, int]:
 
     for pattern in SHAPES + (GENERIC if generic else ()):
         text = pattern.sub(swap, text)
-    return text, total
+    text, n = _pairs(NAMED if generic else UPPER, text)
+    return text, total + n
 
 
 def redact(text: str, generic: bool = True) -> str:
@@ -182,7 +220,7 @@ def redact(text: str, generic: bool = True) -> str:
     Replace every credential shaped substring with ``[REDACTED]``.
 
     :param text: Any text
-    :param generic: Also replace values of ``name: value`` pairs named like credentials; off for the ledger
+    :param generic: Also judge every ``name: value`` pair and header shape; off for the ledger
     :returns: The same text with secrets replaced
     """
     return redact_count(text, generic)[0]

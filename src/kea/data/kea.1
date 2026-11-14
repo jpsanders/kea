@@ -81,7 +81,7 @@ journal/
 Execution logs and the notes a STATE.md entry points to
 .TP
 \&.kea/
-The local search index. Never committed; delete it any time and kea ingest rebuilds it
+The local search index and the backups kea init --force made. Never committed; keep the backups
 .PP
 Entries are headings kea can read back: \fB### D\-0002 · 2026\-11\-13 · Title\fR followed by \fB\- **Field:** value\fR lines. Keep that shape when you edit by hand and every other line you write is left exactly as it is.
 .SH THE RULES
@@ -115,7 +115,7 @@ Every command that prints data takes \fB\-\-json\fR and prints one JSON document
 .SS Start and look
 .TP
 kea init [PATH]
-Make a brain, or put back a brain's missing files; --example, --force (backs up first), --default
+Make a brain or put back its missing files; --example, --add (beside yours), --force, --default
 .TP
 kea status
 The whole brain: freshness, due decisions and predictions, roadmap, plans, seats, evidence, health
@@ -174,7 +174,7 @@ kea ingest
 Scan the brain and every source ingested before again; unchanged files are skipped
 .TP
 kea search QUERY
-Every word first, then hits marked "some words"; --kind, --platform, --mine, --since, --limit
+Every word first, then hits marked "some words"; --kind, --platform, --mine, --since, --any
 .TP
 kea show ID
 One hit in full with its source; --context N shows the turns around it
@@ -355,7 +355,10 @@ kea.toml
 Marks a brain; settings for the brain, the packet, your identity and ingest
 .TP
 \&.kea/index.sqlite
-The local search index, one per brain
+The local search index, one per brain. If it is damaged, delete it with its -wal and -shm files
+.TP
+\&.kea/backup-TIME/
+The files kea init --force replaced, as they were
 .TP
 council/briefing/
 Built packets; ignored by git

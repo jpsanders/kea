@@ -1,7 +1,8 @@
 # AGENTS.md: how to work in this brain
 
 This folder is a kea brain: the facts, decisions, predictions and plans of {{owner}}. Read this file before anything
-else, and follow it in every session. The kea command line (or the kea MCP server) reads and writes every file here.
+else, and follow it in every session. The kea command line reads and writes every file here. The kea MCP server
+works on the default brain unless `KEA_BRAIN` names another, so check the brain that `brain_status` names first.
 
 ## Read order
 

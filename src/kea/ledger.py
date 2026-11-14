@@ -791,6 +791,14 @@ def check(brain: Brain) -> list[Finding]:
     for path in _frameworks(brain):
         for gap in framework_gaps(path):
             add(Finding("warn", f"frameworks/{path.name}", 0, gap))
+    if brain.file("council", "roster.toml").is_file():
+        from kea import council
+
+        try:
+            for error in council.roster(brain).errors:
+                add(Finding("warn", "council/roster.toml", 0, error))
+        except council.CouncilError as exc:
+            add(Finding("error", "council/roster.toml", 0, str(exc)))
     for plan in plans_with_production(brain):
         count = sum(1 for p in predictions(brain) if p["plan"] and plan in p["plan"])
         if count < 3:

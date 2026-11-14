@@ -67,7 +67,7 @@ and agents edit by hand next to the CLI.
 | plans/ | One folder per plan: proposal, questions, reviews, synthesis, production plan, execution log |
 | council/ | PROTOCOL.md, the rules, and roster.toml, the seats |
 | journal/ | Execution logs and the notes a STATE.md entry points to |
-| .kea/ | The local search index. Never committed; delete it any time and kea ingest rebuilds it |
+| .kea/ | The local search index and the backups kea init --force made. Never committed; keep the backups |
 
 Entries are headings kea can read back: `### D-0002 · 2026-11-13 · Title` followed by `- **Field:** value` lines.
 Keep that shape when you edit by hand and every other line you write is left exactly as it is.
@@ -98,7 +98,7 @@ or, for `--since`, `-30d`.
 
 | Command | What it does |
 | --- | --- |
-| kea init [PATH] | Make a brain, or put back a brain's missing files; --example, --force (backs up first), --default |
+| kea init [PATH] | Make a brain or put back its missing files; --example, --add (beside yours), --force, --default |
 | kea status | The whole brain: freshness, due decisions and predictions, roadmap, plans, seats, evidence, health |
 | kea check | Lint: unsourced facts, facts past recheck, malformed entries, overdue items. Exit 1 on errors; --strict |
 | kea state | The facts and the newest log entries; --entries N |
@@ -127,7 +127,7 @@ or, for `--since`, `-30d`.
 | --- | --- |
 | kea ingest SOURCE [PATH] | Index a source locally. Sources: claude-code, codex, opencode, chatgpt, claude, git, docs |
 | kea ingest | Scan the brain and every source ingested before again; unchanged files are skipped |
-| kea search QUERY | Every word first, then hits marked "some words"; --kind, --platform, --mine, --since, --limit |
+| kea search QUERY | Every word first, then hits marked "some words"; --kind, --platform, --mine, --since, --any |
 | kea show ID | One hit in full with its source; --context N shows the turns around it |
 | kea sources | What the index was read from, with errors |
 | kea forget ID | Delete a source and what was read from it; later scans skip it; --kind KIND for a whole kind |
@@ -287,7 +287,8 @@ projects.
 | Path | What it is |
 | --- | --- |
 | kea.toml | Marks a brain; settings for the brain, the packet, your identity and ingest |
-| .kea/index.sqlite | The local search index, one per brain |
+| .kea/index.sqlite | The local search index, one per brain. If it is damaged, delete it with its -wal and -shm files |
+| .kea/backup-TIME/ | The files kea init --force replaced, as they were |
 | council/briefing/ | Built packets; ignored by git |
 | ~/.config/kea/config.toml | Your default brain |
 

@@ -446,7 +446,12 @@ def parse_review(text: str) -> dict[str, Any] | None:
 
 
 def _finite(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    """Tell whether a value is a usable confidence: a number from 0 to 100."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, int):
+        return 0 <= value <= 100
+    return math.isfinite(value) and 0 <= value <= 100
 
 
 def _words(text: str) -> set[str]:
@@ -506,10 +511,13 @@ def synth(brain: Brain, slug: str) -> dict[str, Any]:
     reviews: list[dict[str, Any]] = []
     recs: list[dict[str, Any]] = []
     for path in files:
-        data = parse_review(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        data = parse_review(text)
         if data is not None and not isinstance(data.get("recommendations", []), list):
             data = None
-        seat = (data or {}).get("seat") or (path.name.split("_")[1] if path.name.count("_") >= 2 else path.stem)
+        header = re.search(r"^\| Seat \| (.+?) \|$", text[:2000], re.M)
+        named = header[1].strip() if header else (data or {}).get("seat")
+        seat = named or (path.name.split("_")[1] if path.name.count("_") >= 2 else path.stem)
         reviews.append({"file": path.name, "seat": str(seat), "data": data})
         for rec in (data or {}).get("recommendations") or []:
             if isinstance(rec, dict) and isinstance(rec.get("claim"), str) and rec["claim"].strip():

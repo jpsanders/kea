@@ -11,7 +11,8 @@ command takes `--json`) or the kea MCP server (tools such as `brain_status`, `se
 brain from `--brain`, then `$KEA_BRAIN`, then the current folder and its parents, then the user's default; the MCP
 server tries the default before the folders, and its initialize message names the brain in use.
 
-If `kea` is not installed: `uv tool install --python 3.15 git+https://github.com/jpsanders/kea` (uv fetches 3.15).
+If `kea` is not installed: `uv self update`, then `uv tool install --python 3.15 git+https://github.com/jpsanders/kea`
+(uv fetches Python 3.15; an older uv only knows its previews).
 If there is no brain yet, ask the user where it should live, then `kea init <folder>`.
 
 ## Start of a session

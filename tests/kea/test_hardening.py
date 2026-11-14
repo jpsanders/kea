@@ -553,7 +553,7 @@ def test_a_damaged_index_gives_one_clear_line(run: Run, example: Brain) -> None:
     example.index_path.parent.mkdir(exist_ok=True)
     example.index_path.write_bytes(b"not a database at all" * 100)
     code, out, err = run("--brain", str(example.root), "search", "x", "--json")
-    assert code == 1 and "delete the brain's .kea folder" in err and json.loads(out)["error"]
+    assert code == 1 and "delete .kea/index.sqlite" in err and json.loads(out)["error"]
 
 
 def test_since_accepts_offsets_and_rejects_nonsense(run: Run, example: Brain) -> None:
@@ -850,3 +850,179 @@ def test_resume_reads_the_seat_from_the_review(brain: Brain) -> None:
             council.run(brain, "p", resume=True, ask=lambda seat, system, user: "again")
     finally:
         module._ready = original
+
+
+# ---------------------------------------------------------------- third round
+
+
+@pytest.mark.parametrize(
+    "text, secret",
+    [
+        ("curl https://api.example/v1/now?api_key=Wk3yLiveA1b2C3d4E5&units=metric", "Wk3yLiveA1b2C3d4E5"),
+        ("mysql -u root --password=Hunter2Secret99", "Hunter2Secret99"),
+        ("jdbc:postgresql://db:5432/app?user=app&password=PgSecret2026x", "PgSecret2026x"),
+        ("Cookie: sessionid=abc123def456ghi; csrftoken=zzz", "abc123def456ghi"),
+        ("--api-key=abcd1234efgh5678", "abcd1234efgh5678"),
+    ],
+)
+def test_secrets_inside_urls_flags_and_cookies(text: str, secret: str) -> None:
+    assert secret not in redact(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "token = get_token(user)",
+        "secret_name = os.environ.get(name)",
+        "credentials_path = Path.home() / 'creds'",
+        "docker run -u 1000:1000 app",
+        "podman exec -u root:root ctr sh",
+        "rsync -u deploy@host:/srv/app",
+        "TOKEN_COUNT=123456789",
+    ],
+)
+def test_code_and_commands_are_not_secrets(text: str) -> None:
+    assert redact(text) == text and redact(text, generic=False) == text
+
+
+def test_long_pairs_stay_linear_and_long_secrets_hide_whole() -> None:
+    import time
+
+    start = time.perf_counter()
+    redact("a=b" * 30000)
+    redact("TOKEN_" * 6000, generic=False)
+    assert time.perf_counter() - start < 2
+    assert redact("password=" + "y" * 900 + " tail") == "password=[REDACTED] tail"
+
+
+def test_ids_search_as_phrases_and_any_marks_only_partial_hits(brain: Brain) -> None:
+    ledger.decide(brain, "First", "One")
+    ledger.decide(brain, "Second", "Two")
+    ledger.predict(brain, "Claim", "+3d", 50)
+    ledger.predict(brain, "Other", "+3d", 50)
+    with Store(brain.index_path) as store:
+        ingest.refresh_brain(brain, store)
+        hits = store.search("P-0002")
+        assert hits[0]["ref"].startswith("PREDICTIONS.md") and hits[0]["partial"] is False
+        assert all(h["partial"] for h in hits[1:])
+        anyhits = store.search("Second Two", any_word=True)
+        assert any(not h["partial"] for h in anyhits)
+
+
+def test_init_add_keeps_your_files_and_merges_gitignore(run: Run, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "README.md").write_text("# My vault\n")
+    (vault / "CLAUDE.md").write_text("Always answer in French.\n")
+    (vault / ".gitignore").write_text("secret-stuff/\n")
+    code, _, err = run("init", str(vault), "--no-git")
+    assert code == 1 and "--add" in err
+    code, out, _ = run("init", str(vault), "--add", "--no-git")
+    assert code == 0 and "kept" in out
+    assert (vault / "README.md").read_text() == "# My vault\n"
+    assert (vault / "CLAUDE.md").read_text() == "Always answer in French.\n"
+    ignore = (vault / ".gitignore").read_text()
+    assert ignore.startswith("secret-stuff/\n") and ".kea/" in ignore
+    code, out, _ = run("init", str(vault), "--force", "--no-git")
+    assert "the files it replaced are in" in out and (vault / ".gitignore").read_text().startswith("secret-stuff/")
+
+
+def test_mcp_ingest_by_source_survives_a_missing_root_and_drops_a_denied_one(example: Brain, tmp_path: Path) -> None:
+    gone, kept, client = tmp_path / "a-notes", tmp_path / "b-notes", tmp_path / "clients" / "notes"
+    for folder, word in ((gone, "alpha"), (kept, "bravo"), (client, "charlie")):
+        folder.mkdir(parents=True)
+        (folder / "x.md").write_text(f"{word} words")
+    with Store(example.index_path) as store:
+        for folder in (gone, kept, client):
+            ingest.ingest(example, store, "docs", str(folder))
+    shutil.rmtree(gone)
+    (kept / "y.md").write_text("pepino arrives")
+    toml = example.file("kea.toml")
+    toml.write_text(toml.read_text().replace("deny = []", 'deny = ["clients"]'))
+    server = mcp.Server(str(example.root))
+    reply = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "ingest", "arguments": {"source": "docs"}},
+        }
+    )
+    assert reply is not None and not reply["result"]["isError"]
+    with Store(example.index_path) as store:
+        assert store.search("pepino") and store.search("bravo") and not store.search("charlie")
+
+
+def test_session_links_are_judged_by_their_target(brain: Brain, tmp_path: Path) -> None:
+    secret = tmp_path / ".aws"
+    secret.mkdir()
+    real = secret / "s.jsonl"
+    real.write_text(json.dumps({"type": "user", "message": {"content": "rambutan secret"}}) + "\n")
+    elsewhere = tmp_path / "elsewhere.jsonl"
+    elsewhere.write_text(json.dumps({"type": "user", "message": {"content": "rambutan outside"}}) + "\n")
+    projects = tmp_path / "projects" / "p"
+    projects.mkdir(parents=True)
+    os.symlink(real, projects / "a.jsonl")
+    os.symlink(elsewhere, projects / "b.jsonl")
+    with Store(brain.index_path) as store:
+        report = ingest.ingest(brain, store, "claude-code", str(tmp_path / "projects"))
+        assert report.skipped == 2 and store.search("rambutan") == []
+
+
+def test_docs_count_the_links_they_skip(brain: Brain, tmp_path: Path) -> None:
+    outside = tmp_path / "Dropbox"
+    outside.mkdir()
+    (outside / "taxes.md").write_text("tax words")
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "own.md").write_text("own words")
+    os.symlink(outside / "taxes.md", notes / "taxes.md")
+    with Store(brain.index_path) as store:
+        report = ingest.ingest(brain, store, "docs", str(notes))
+        assert report.read == 1 and report.skipped == 1
+
+
+def test_synth_names_seats_from_the_review_header(brain: Brain) -> None:
+    council.plan_new(brain, "p")
+    reviews = brain.file("plans", "p", "reviews")
+    block = '<!--COUNCIL-JSON {"recommendations": [{"claim": "Same claim here", "confidence": 1e308}]} COUNCIL-JSON-->'
+    for seat in ("risk_officer", "risk_analyst"):
+        (reviews / f"2026-11-14_{seat}_m.md").write_text(f"| Seat | {seat} |\n\n{block}")
+    (reviews / "2026-11-14_big_m.md").write_text(
+        '| Seat | big |\n\n<!--COUNCIL-JSON {"recommendations": [{"claim": "x", "confidence": ' + "9" * 400 + "}]}"
+        " COUNCIL-JSON-->"
+    )
+    out = council.synth(brain, "p")
+    scaffold = brain.file("plans", "p", "10-synthesis-scaffold.md").read_text()
+    assert out["parsed"] == 3 and "risk_analyst, risk_officer" in scaffold
+
+
+def test_roster_mistakes_show_in_check_and_dry_run(run: Run, brain: Brain) -> None:
+    brain.file("council", "roster.toml").write_text(
+        '[[seat]]\nname = "risk officer"\nprovider = "ollama"\nmodel = "m"\n'
+    )
+    assert any("risk officer" in f.message for f in ledger.check(brain))
+    council.plan_new(brain, "p")
+    code, out, _ = run("--brain", str(brain.root), "council", "p", "--dry-run")
+    assert "roster:" in out
+
+
+def test_mixed_heading_separators_still_read(brain: Brain) -> None:
+    path = brain.file("PREDICTIONS.md")
+    path.write_text(
+        path.read_text() + "\n### P-0010 | by 2026-12-01 · 60% · Mixed separators claim\n\n- **Status:** OPEN\n"
+    )
+    p = ledger.predictions(brain)[0]
+    assert p["confidence"] == 60 and "Mixed separators claim" in p["claim"]
+
+
+def test_saying_no_under_json_prints_a_json_error(run: Run, brain: Brain, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MY_KEY", "k")
+    brain.file("council", "roster.toml").write_text(
+        '[[seat]]\nname = "x"\nprovider = "openai"\nbase_url = "https://example.invalid/v1"\nmodel = "m"\n'
+        'key_env = "MY_KEY"\n'
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("n\n"))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
+    code, out, err = run("--brain", str(brain.root), "seats", "--probe", "--json")
+    assert code == 1 and json.loads(out)["error"].startswith("nothing sent")
