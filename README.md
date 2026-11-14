@@ -194,7 +194,8 @@ pip install https://github.com/jpsanders/kea/releases/download/1.0.0/kea_brain-1
 docker build -t kea . && docker run --rm -it --user "$(id -u):$(id -g)" -v ~/brain:/brain kea status
 ```
 
-kea needs Python 3.15; with `--python 3.15`, uv downloads it for you. The distribution is called `kea-brain` and the command is `kea`.
+kea needs Python 3.15; with `--python 3.15`, uv downloads it for you (run `uv self update` first: an older uv knows
+only the 3.15 previews). The distribution is called `kea-brain` and the command is `kea`.
 Then `kea man --install` makes `man kea` work.
 
 ## Commands
@@ -219,10 +220,11 @@ Everything is in the [manual](docs/MANUAL.md): `kea guide` prints it, `man kea` 
 
 Your brain is a folder you own; the index is a SQLite file inside it, readable only by you, that git ignores. kea has
 no telemetry and no account. Ingest opens your sources read only, never opens paths such as `.ssh`, `.aws`, `.env`,
-shell histories or `credentials` (a symbolic link is judged by where it points), and redacts anything shaped like a
-key or a token before storing it, before writing it to the ledger, and before a packet leaves. The only thing that
-ever leaves your machine is a council packet, and `kea council` asks first, naming every host. API keys travel in
-headers, never in URLs, and no request follows a redirect. More in [SECURITY.md](SECURITY.md).
+shell histories or `credentials` (a symbolic link is judged by where it points, and skipped if it leads out of a
+folder you ingest), and redacts anything shaped like a key or a token before storing it and before a packet leaves.
+What you write into the ledger loses only unmistakable key shapes, so your own words stay as you wrote them. The only
+thing that ever leaves your machine is a council packet, and `kea council` asks first, naming every host. API keys
+travel in headers, never in URLs, and no request follows a redirect. More in [SECURITY.md](SECURITY.md).
 
 ## Performance
 

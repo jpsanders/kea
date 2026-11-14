@@ -52,7 +52,7 @@ class LedgerError(Exception):
 
 
 def _clean(text: str) -> str:
-    return redact(" ".join(str(text).split()))
+    return redact(" ".join(str(text).split()), generic=False)
 
 
 def _need_file(brain: Brain, name: str) -> Path:
@@ -94,7 +94,7 @@ def facts(brain: Brain) -> list[Fact]:
         return []
     out = []
     for i in range(table[0] + 1, table[1]):
-        if is_separator(lines[i]):
+        if not lines[i].strip().startswith("|") or is_separator(lines[i]):
             continue
         cells = table_cells(lines[i]) + ["", "", "", ""]
         out.append(Fact(cells[0], cells[1], cells[2], cells[3], i + 1))
@@ -155,13 +155,13 @@ def log(brain: Brain, text: str, title: str | None = None, source: str | None = 
     :returns: The entry written
     :raises LedgerError: When the text is empty
     """
-    text = redact(text.strip())
+    text = redact(text.strip(), generic=False)
     if not text:
         raise LedgerError("a log entry needs text")
     if not title:
         first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
         title = first if len(first) <= 80 else first[:77].rsplit(" ", 1)[0] + "..."
-    title = redact(clean_part(title)).rstrip(".")
+    title = redact(clean_part(title), generic=False).rstrip(".")
     moment = brain.now()
     body = text + (f"\n\nSource: {_clean(source)}" if source else "")
     block = [f"### {moment:%Y-%m-%d %H:%M}{SEP}{title}", ""] + body.splitlines()
@@ -171,11 +171,12 @@ def log(brain: Brain, text: str, title: str | None = None, source: str | None = 
 
 
 def _unverified(lines: list[str]) -> int:
+    """Count UNVERIFIED in the facts table and the log entries' text: not in headings, not in the files' own prose."""
     count = 0
-    for title in ("Facts", "Log"):
-        span = section_span(lines, title)
-        if span:
-            count += sum(line.count("UNVERIFIED") for line in lines[span[0] + 1 : span[1]])
+    table = _facts_table(lines)
+    if table:
+        count += sum(line.count("UNVERIFIED") for line in lines[table[0] : table[1]])
+    count += sum(" ".join(e.body).count("UNVERIFIED") for e in parse_log(lines))
     return count
 
 
@@ -233,7 +234,7 @@ def _decision_view(entry: Entry, today: date) -> dict[str, Any]:
     return {
         "id": entry.id,
         "date": entry.head[0] if entry.head else "",
-        "title": SEP.join(entry.head[1:]),
+        "title": entry.joined(1),
         "decision": entry.get("Decision"),
         "status": status,
         "why": entry.get("Why"),
@@ -356,7 +357,7 @@ def _prediction_view(entry: Entry, today: date) -> dict[str, Any]:
         "id": entry.id,
         "by": by.isoformat() if by else by_text,
         "confidence": confidence,
-        "claim": SEP.join(entry.head[2:]) or entry.get("Claim"),
+        "claim": entry.joined(2) or entry.get("Claim"),
         "status": status,
         "made": entry.get("Made"),
         "plan": entry.get("Plan"),
@@ -532,7 +533,7 @@ def ideas(brain: Brain) -> list[dict[str, Any]]:
         {
             "id": e.id,
             "date": e.head[0] if e.head else "",
-            "title": SEP.join(e.head[1:]),
+            "title": e.joined(1),
             "status": (e.get("Status") or "PARKED").upper(),
         }
         for e in _entries(brain, IDEAS)[2]
@@ -543,6 +544,7 @@ def ideas(brain: Brain) -> list[dict[str, Any]]:
 
 
 ITEM = re.compile(r"^- \[(?P<done>[ xX])\] (?P<text>.*)$")
+ANY_ITEM = re.compile(r"^\s*- \[(?P<done>[ xX])\] (?P<text>.*)$")
 
 
 def roadmap(brain: Brain) -> dict[str, Any]:
@@ -560,10 +562,11 @@ def roadmap(brain: Brain) -> dict[str, Any]:
         if not span:
             continue
         for i in range(span[0] + 1, span[1]):
-            m = ITEM.match(lines[i])
+            m = ANY_ITEM.match(lines[i])
             if m and m["done"] == " ":
                 number += 1
-                out[key].append({"n": number, "text": m["text"].strip(), "line": i + 1})
+                nested = lines[i][:1] in (" ", "\t")
+                out[key].append({"n": number, "text": m["text"].strip(), "line": i + 1, "nested": nested})
     span = section_span(lines, "Dates")
     if span:
         for i in range(span[0] + 1, span[1]):

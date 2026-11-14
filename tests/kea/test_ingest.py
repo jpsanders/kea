@@ -346,7 +346,7 @@ def test_docs_and_the_brain_itself(brain: Brain, tmp_path: Path) -> None:
 
 
 def test_fts_query_and_like_fallback(brain: Brain, tmp_path: Path) -> None:
-    assert fts_query('flat "white coffee" c++') == '"flat" "white coffee" "c"'
+    assert fts_query('flat "white coffee" c++') == '"flat" "white coffee"'
     assert fts_query("flat white", any_word=True) == '"flat" OR "white"'
     assert fts_query("what did we decide about pricing") == '"decide" "pricing"'
     assert fts_query("the") == '"the"'

@@ -9,6 +9,7 @@ Files keep their line endings and permissions, and a symbolic link stays a link.
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -20,7 +21,7 @@ LOG_HEADING = re.compile(
     r"^### (?P<date>\d{4}-\d{2}-\d{2})(?: (?P<time>\d{2}:\d{2}))?" r"\s*(?:·|\|)\s*(?P<title>.*?)\s*$"
 )
 SECTION = re.compile(r"^#{1,2} ")
-PART_SPLIT = re.compile(r"\s(?:·|\|)\s")
+SPLITS = {"·": re.compile(r"\s·\s"), "|": re.compile(r"\s\|\s")}
 
 
 def clean_part(text: str) -> str:
@@ -42,6 +43,17 @@ class Entry:
     body: list[str] = field(default_factory=list)
     start: int = 0
     end: int = 0
+    sep: str = "·"
+    heading: str | None = None
+
+    def joined(self, first: int) -> str:
+        """
+        Join the heading parts from one index on, with the separator the heading uses.
+
+        :param first: The first part to include
+        :returns: The parts, joined
+        """
+        return f" {self.sep} ".join(self.head[first:])
 
     def spans(self) -> list[tuple[str, int, int]]:
         """
@@ -107,13 +119,13 @@ class Entry:
 
     def set(self, key: str, value: str) -> None:
         """
-        Set a field on one line, replacing its first occurrence where it stands, or adding it after the last field.
+        Set a field on one line where :meth:`get` reads it (its last occurrence), or add it after the last field.
 
         :param key: Field name
         :param value: New value
         """
         line = _field_line(key, value)
-        for name, a, b in self.spans():
+        for name, a, b in reversed(self.spans()):
             if name.lower() == key.lower():
                 self.body[a:b] = [line]
                 return
@@ -134,7 +146,7 @@ class Entry:
 
         :returns: Lines without newlines
         """
-        heading = f"### {self.id}{SEP}{SEP.join(self.head)}"
+        heading = self.heading or f"### {self.id}{SEP}{SEP.join(self.head)}"
         return [heading, ""] + self.body if self.body else [heading]
 
 
@@ -160,8 +172,9 @@ def parse_entries(lines: list[str]) -> list[Entry]:
                 current = None
             m = HEADING.match(line)
             if m:
-                head = [p.strip() for p in PART_SPLIT.split(m["rest"])] if m["rest"] else []
-                current = Entry(id=m["id"], head=head, start=i)
+                sep = "|" if re.match(r"^### [A-Z]-\d+\s*\|", line) else "·"
+                head = [p.strip() for p in SPLITS[sep].split(m["rest"])] if m["rest"] else []
+                current = Entry(id=m["id"], head=head, start=i, sep=sep, heading=line)
             continue
         if current is not None:
             current.body.append(line)
@@ -222,21 +235,35 @@ def write_lines(path: Path, lines: list[str]) -> None:
 
     :param path: The file
     :param lines: Lines without newlines
+    :raises BaseException: Whatever stopped the write, after the temporary file is removed
     """
     target = path.resolve() if path.is_symlink() else path
     target.parent.mkdir(parents=True, exist_ok=True)
-    newline, mode = "\n", None
+    newline, mode = "\n", 0o644 & ~_umask()
     if target.is_file():
-        newline = "\r\n" if b"\r\n" in target.read_bytes()[:65536] else "\n"
+        raw = target.read_bytes()
+        crlf = raw.count(b"\r\n")
+        newline = "\r\n" if crlf > raw.count(b"\n") - crlf else "\n"
         mode = target.stat().st_mode & 0o7777
     body = list(lines)
     while body and not body[-1].strip():
         body.pop()
-    tmp = target.with_name(f".{target.name}.kea-tmp")
-    tmp.write_bytes((newline.join(body) + newline).encode("utf-8"))
-    if mode is not None:
-        os.chmod(tmp, mode)
-    tmp.replace(target)
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".kea-tmp", dir=target.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write((newline.join(body) + newline).encode("utf-8"))
+        os.replace(tmp, target)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def _umask() -> int:
+    current = os.umask(0)
+    os.umask(current)
+    return current
 
 
 def insert_after_marker(lines: list[str], marker: str, block: list[str]) -> list[str]:
@@ -347,8 +374,18 @@ def first_table(lines: list[str], start: int, end: int) -> tuple[int, int] | Non
     for i in range(start, end):
         if lines[i].strip().startswith("|"):
             j = i
-            while j < end and lines[j].strip().startswith("|"):
-                j += 1
+            while j < end:
+                if lines[j].strip().startswith("|"):
+                    j += 1
+                    continue
+                k = j
+                while k < end and not lines[k].strip():
+                    k += 1
+                # A row after blank lines still belongs to the table, unless it starts a new table with its own header.
+                if k < end and lines[k].strip().startswith("|") and not (k + 1 < end and is_separator(lines[k + 1])):
+                    j = k
+                    continue
+                break
             return i, j
     return None
 

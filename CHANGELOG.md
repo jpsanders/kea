@@ -25,12 +25,13 @@ The first release.
 - **Agents**: an MCP server with 25 tools, five resources and three prompts; three skills installed into Claude Code,
   Codex, OpenCode and `~/.agents` by `kea skill install`; a Claude Code plugin; `AGENTS.md` and `CLAUDE.md` in every
   brain.
-- **Safety**: nothing shaped like a key or token is stored in the index, written to the ledger or sent in a packet
-  (provider keys, `NAME_API_KEY=` lines, passwords in URLs, private keys); credential paths such as `.ssh`,
-  `.env.local`, shell histories and `.pem` files are refused, symbolic links included; the index is private to you;
-  requests follow no redirects; agents on MCP can neither add sources nor send a packet off the machine unless
-  `kea.toml` allows it.
-  Three independent reviews before release found 56 issues; each is fixed and pinned by a test.
+- **Safety**: nothing shaped like a key or token is stored in the index or sent in a packet (provider keys,
+  `NAME_API_KEY=` lines, passwords in URLs, private keys), and unmistakable key shapes never reach the ledger;
+  credential paths such as `.ssh`, `.env.local`, shell histories and `.pem` files are refused, symbolic links
+  included; the index is private to you; requests follow no redirects; agents on MCP can neither add sources nor send
+  a packet off the machine unless `kea.toml` allows it.
+  Three independent reviews before release found 56 issues; each is fixed and pinned by a test, and two more agents
+  verified the fixes and found 25 regressions, also fixed and tested.
 - `kea digest` turns a Claude Code transcript into private readable files in the brain's `digests/` folder.
 - `kea init --example` makes a complete example brain to explore. `kea init` on an existing brain puts back missing
   files and changes nothing else; `--force` keeps a backup of every file it overwrites.

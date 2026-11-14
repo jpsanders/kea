@@ -28,7 +28,10 @@ def test_credentials_are_redacted_and_the_text_around_them_survives(secret: str)
 def test_key_value_pairs_keep_the_key() -> None:
     assert redact("api_key = 'hunter2hunter2'") == "api_key = '[REDACTED]'"
     assert redact('"password": "correcthorsebattery"') == '"password": "[REDACTED]"'
-    assert redact("Authorization: Bearer abcdefghijklmnopqrstuvwxyz") == "Authorization: Bearer [REDACTED]"
+    assert redact("Authorization: Bearer abc123def456ghi789jkl0") == "Authorization: Bearer [REDACTED]"
+    assert (
+        redact("Authorization: Bearer abcdefghijklmnopqrstuvwxyz") == "Authorization: Bearer abcdefghijklmnopqrstuvwxyz"
+    )
 
 
 def test_private_keys_and_service_accounts() -> None:

@@ -40,7 +40,7 @@ PRESETS: dict[str, tuple[str, str | None, str]] = {
 }
 RETRY_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-SEAT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,40}$")
+SEAT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,40}$")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -104,7 +104,7 @@ class Seat:
             if not raw.get(needed):
                 raise ProviderError(f"a seat needs a {needed}: {raw}")
         if not SEAT_NAME.match(str(raw["name"])):
-            raise ProviderError(f"seat name {raw['name']!r}: use letters, digits and hyphens")
+            raise ProviderError(f"seat name {raw['name']!r}: use letters, digits, hyphens and underscores")
         custom = bool(raw.get("base_url")) and str(raw["base_url"]).rstrip("/") != (preset[0] if preset else "")
         return cls(
             name=str(raw["name"]),

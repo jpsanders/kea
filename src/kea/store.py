@@ -123,7 +123,7 @@ def fts_query(text: str, any_word: bool = False) -> str:
             terms.append('"' + " ".join(tokens) + '"')
         else:
             terms += [f'"{t}"' for t in tokens]
-    meaningful = [t for t in terms if " " in t or t.strip('"').lower() not in STOPWORDS]
+    meaningful = [t for t in terms if " " in t or (t.strip('"').lower() not in STOPWORDS and len(t) > 3)]
     return (" OR " if any_word else " ").join(meaningful or terms)
 
 
@@ -235,6 +235,21 @@ class Store:
             (kind, path, now().isoformat(timespec="seconds")),
         )
 
+    def drop_root(self, kind: str, path: str) -> int:
+        """
+        Forget a root and every source read under it, as when a deny rule now covers it.
+
+        :param kind: The adapter
+        :param path: The root
+        :returns: How many sources were deleted
+        """
+        self.db.execute("DELETE FROM roots WHERE kind = ? AND path = ?", (kind, path))
+        prefix = path.rstrip("/") + "/"
+        rows = self.db.execute("SELECT id, path FROM sources WHERE kind = ?", (kind,)).fetchall()
+        gone = [r["id"] for r in rows if r["path"] == path or r["path"].startswith(prefix)]
+        self.db.executemany("DELETE FROM sources WHERE id = ?", [(i,) for i in gone])
+        return len(gone)
+
     def is_forgotten(self, kind: str, path: str) -> bool:
         """
         Tell whether a source was forgotten and must not be read again.
@@ -300,9 +315,12 @@ class Store:
         :param ident: One source's id
         :param kind: Every source of one kind
         :returns: How many sources were deleted
+        :raises ValueError: When the source is one of the brain's own files
         """
         if ident is not None:
             row = self.db.execute("SELECT kind, path FROM sources WHERE id = ?", (ident,)).fetchone()
+            if row and row["kind"] == "brain":
+                raise ValueError("the brain's own files are always searchable; move or delete the file to drop it")
             if row:
                 self.db.execute(
                     "INSERT OR REPLACE INTO forgotten (kind, path, at) VALUES (?, ?, ?)",
@@ -329,8 +347,8 @@ class Store:
         """
         Search every item, best match first, each with a snippet and its provenance.
 
-        Items with every word come first; when there are fewer than ``limit`` of them, items with any of the words
-        follow, so a question in plain words still finds its answer.
+        Items with every word come first; when there are fewer than ``limit`` of them, items with some of the words
+        follow, marked ``partial``, so a question in plain words still finds its answer.
 
         :param query: Free text; quote a phrase to keep it together
         :param kind: ``message``, ``commit``, ``doc`` or ``note``
@@ -363,12 +381,13 @@ class Store:
                 f"FROM items_fts JOIN items i ON i.id = items_fts.rowid WHERE items_fts MATCH ?{extra} "
                 "ORDER BY bm25(items_fts, 3.0, 1.0) LIMIT ?"
             )
-            rows = self.db.execute(sql, [match, *params, limit]).fetchall()
+            found = [{**dict(r), "partial": any_word} for r in self.db.execute(sql, [match, *params, limit])]
             wider = fts_query(query, any_word=True)
-            if len(rows) < limit and not any_word and wider != match:
-                seen = {r["id"] for r in rows}
+            if len(found) < limit and not any_word and wider != match:
+                seen = {r["id"] for r in found}
                 more = self.db.execute(sql, [wider, *params, limit]).fetchall()
-                rows += [r for r in more if r["id"] not in seen][: limit - len(rows)]
+                found += [{**dict(r), "partial": True} for r in more if r["id"] not in seen][: limit - len(found)]
+            return found
         else:
             words = re.findall(r"\w+", query)
             if not words:
@@ -379,7 +398,7 @@ class Store:
                 f"WHERE {like}{extra} ORDER BY i.ts DESC LIMIT ?"
             )
             rows = self.db.execute(sql, [*(f"%{w}%" for w in words), *params, limit]).fetchall()
-        return [dict(r) for r in rows]
+        return [{**dict(r), "partial": False} for r in rows]
 
     def get(self, ident: int) -> dict[str, Any] | None:
         """

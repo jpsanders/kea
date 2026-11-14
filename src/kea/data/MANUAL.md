@@ -34,6 +34,7 @@ your machine except a council packet you choose to send.
 ## QUICK START
 
 ```sh
+uv self update                                          # an older uv knows only 3.15 previews
 uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 if missing
 kea init ~/brain                                        # make a brain; it becomes your default
 cd ~/brain && kea status                                # the whole brain at a glance
@@ -126,7 +127,7 @@ or, for `--since`, `-30d`.
 | --- | --- |
 | kea ingest SOURCE [PATH] | Index a source locally. Sources: claude-code, codex, opencode, chatgpt, claude, git, docs |
 | kea ingest | Scan the brain and every source ingested before again; unchanged files are skipped |
-| kea search QUERY | Best matches first; --kind, --platform, --mine, --since DATE, --limit N, --any |
+| kea search QUERY | Every word first, then hits marked "some words"; --kind, --platform, --mine, --since, --limit |
 | kea show ID | One hit in full with its source; --context N shows the turns around it |
 | kea sources | What the index was read from, with errors |
 | kea forget ID | Delete a source and what was read from it; later scans skip it; --kind KIND for a whole kind |
@@ -157,8 +158,10 @@ or, for `--since`, `-30d`.
 ## FINDING THE BRAIN
 
 kea looks, in order: `--brain PATH`, then `$KEA_BRAIN`, then the current folder and each parent, then the default
-brain named in `~/.config/kea/config.toml`. The first `kea init` sets the default. A folder without `kea.toml` is
-never treated as a brain, so notes kea did not make are never touched.
+brain named in `~/.config/kea/config.toml`. The MCP server tries the default before the folders, so a `kea.toml` in a
+project an agent works in never takes over. The first real `kea init` sets the default (`--example` never does;
+`--default` changes it). A folder without `kea.toml` is never treated as a brain, so notes kea did not make are never
+touched, and `kea init` refuses a folder that already holds other files unless you pass `--force`.
 
 ## EVIDENCE
 
@@ -315,11 +318,14 @@ returned. 2 for a mistake in the arguments. With --json, a failure also prints {
 
 Everything stays on your machine: the brain is your folder, and the index is a SQLite file inside it, readable only
 by you, that git ignores. kea never reads paths that name a credential store (.ssh, .aws, .env and .env.local, shell
-histories, .pem and .key files, credentials, secrets and more; add your own patterns under [ingest] deny), judges a
-symbolic link by where it points, and replaces anything shaped like a key or token with [REDACTED] before it stores
-text, before it writes to the ledger, and before a packet leaves. Changing the deny list rereads what it affects;
-a forgotten source stays out of later scans. The only network calls are the council seats you configure and run, and
-no request follows a redirect. Report security problems privately:
+histories, .pem and .key files, credentials, secrets and more; add your own patterns under [ingest] deny). A
+symbolic link is judged by where it points: one that leads to a credential store, or out of a folder you ingest, is
+skipped (the brain's own files may link anywhere else). kea replaces anything shaped like a key or token with
+[REDACTED] before it stores text and before a packet leaves; what you write into the ledger loses only unmistakable
+key shapes, so ordinary words stay as you wrote them. Changing the deny list rereads what it affects and drops roots
+it now covers; a forgotten source stays out of later scans until you name its path again (the brain's own files
+cannot be forgotten). The only network calls are the council seats you configure and run, and no request follows a
+redirect. Report security problems privately:
 https://github.com/jpsanders/kea/security/advisories/new
 
 ## PERFORMANCE

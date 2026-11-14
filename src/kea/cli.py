@@ -146,6 +146,23 @@ def _since(text: str | None, brain: "Brain") -> str | None:
     return when.isoformat()
 
 
+def _confirm(question: str) -> bool:
+    """Ask on standard error, so a question never lands in --json output, and read the answer from the terminal."""
+    print(question, end="", file=sys.stderr, flush=True)
+    return sys.stdin.readline().strip().lower() in ("y", "yes")
+
+
+def _index_error(exc: Exception) -> str:
+    text = str(exc).lower()
+    if "locked" in text or "busy" in text:
+        return "the search index is busy: another kea is writing to it; try again in a moment"
+    if "readonly" in text or "read-only" in text or "unable to open" in text or "permission" in text:
+        return f"the search index cannot be written here ({exc}): check who owns the brain's .kea folder"
+    if "malformed" in text or "not a database" in text or "corrupt" in text:
+        return f"the search index is damaged ({exc}); delete the brain's .kea folder and run kea ingest to rebuild it"
+    return f"the search index could not be used ({exc})"
+
+
 def _ago(days: int) -> str:
     return "today" if days == 0 else "yesterday" if days == 1 else f"{days} days ago"
 
@@ -185,7 +202,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     def human(p: Paint) -> None:
         if existed and not args.force:
             restored = f"put back {_plural(len(written), 'missing file')}" if written else "found nothing missing"
-            print(f"{p.accent('kea')} {_home(str(folder))} is already a brain: {restored}; nothing else changed")
+            print(f"{p.accent('kea')} {_home(str(folder))} is already a brain: {restored}; no file changed")
+            if default:
+                print(f"  it is now your default brain {p.dim('(' + _home(default) + ')')}")
             return
         print(f"{p.accent('kea')} made a brain in {p.bold(_home(str(folder)))} ({_plural(len(written), 'file')})")
         if default:
@@ -618,9 +637,8 @@ def cmd_council(args: argparse.Namespace) -> int:
     if outside and not args.yes:
         if not sys.stdin.isatty():
             raise CouncilError(f"this sends the packet to {', '.join(outside)}; add --yes to confirm")
-        answer = input(f"send {size:,} bytes of your brain to {', '.join(outside)}? [y/N] ")
-        if answer.strip().lower() not in ("y", "yes"):
-            print("nothing sent")
+        if not _confirm(f"send {size:,} bytes of your brain to {', '.join(outside)}? [y/N] "):
+            print("nothing sent", file=sys.stderr)
             return 1
     manifest = council.run(brain, args.slug, args.seat or None, args.resume)
 
@@ -669,13 +687,13 @@ def cmd_seats(args: argparse.Namespace) -> int:
     """
     brain = _brain(args)
     rows = council.seats(brain)
+    errors = council.roster(brain).errors
     custom = sorted({r["host"] for r in rows if r["ready"] and r["custom"]})
     if args.probe and custom and not args.yes:
         if not sys.stdin.isatty():
             raise CouncilError(f"--probe sends your API key to custom endpoints ({', '.join(custom)}); add --yes")
-        answer = input(f"--probe sends your API key to {', '.join(custom)}. Go ahead? [y/N] ")
-        if answer.strip().lower() not in ("y", "yes"):
-            print("nothing sent")
+        if not _confirm(f"--probe sends your API key to {', '.join(custom)}. Go ahead? [y/N] "):
+            print("nothing sent", file=sys.stderr)
             return 1
     if args.probe:
         rows = council.seats(brain, True)
@@ -691,6 +709,8 @@ def cmd_seats(args: argparse.Namespace) -> int:
             print(f"  {p.accent(f'{r['seat']:<12}')} {state} {r['model']} {p.dim('· ' + where + ' · ' + r['key'])}")
             if r.get("detail") and not r.get("answered"):
                 print(p.dim(f"      {r['detail']}"))
+        for error in errors:
+            print(p.warn(f"  roster: {error}"))
         print(p.dim("the Chair is the agent you work with: it reviews first, from the packet alone"))
 
     return emit(args, rows, human)
@@ -720,6 +740,8 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             line = f"{r.read} read, {r.unchanged} unchanged"
             if r.skipped:
                 line += f", {r.skipped} skipped (denied)"
+            if r.forgotten:
+                line += f", {r.forgotten} forgotten"
             if r.dropped:
                 line += f", {r.dropped} gone"
             print(f"  {p.accent(f'{r.kind:<12}')} {line} · {_plural(r.items, 'item')} {p.dim(_home(r.path))}")
@@ -795,6 +817,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         for h in hits:
             when = (h["ts"] or "")[:10]
             who = f" · {h['role']}" if h["role"] else ""
+            who += " · some words" if h.get("partial") else ""
             title = _safe(h["title"] or "")[:70]
             print(f"{p.accent(str(h['id']).rjust(6))} {p.dim(h['platform'] + who)} {p.bold(title)} {p.dim(when)}")
             snippet = " ".join(_safe(h["snippet"] or "").split())
@@ -853,7 +876,10 @@ def cmd_effort(args: argparse.Namespace) -> int:
 
     def human(p: Paint) -> None:
         if not rows:
-            print(p.dim("no prompts indexed: kea ingest claude-code (or codex, opencode)"))
+            if args.since:
+                print(p.dim(f"no prompts since {args.since}"))
+            else:
+                print(p.dim("no prompts indexed: kea ingest claude-code (or codex, opencode)"))
             return
         total = sum(r["prompts"] for r in rows) or 1
         for r in rows[: args.limit]:
@@ -1129,7 +1155,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mine", action="store_true", help="only what you wrote")
     p.add_argument("--since", metavar="DATE", help="only on or after this date: 2026-11-01, today, -30d")
     p.add_argument("--limit", type=int, default=10)
-    p.add_argument("--any", action="store_true", help="match any word instead of every word")
+    p.add_argument("--any", action="store_true", help="rank by any word; by default, hits with every word come first")
     p.add_argument("--no-refresh", action="store_true", help="skip reading the brain's own files again first")
     p = add("show", cmd_show, "one search hit in full, with where it came from")
     p.add_argument("id", type=int)
@@ -1187,7 +1213,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         known = (BrainError, LedgerError, CouncilError, ProviderError, ValueError, KeyError, OSError)
         message = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
         if type(exc).__module__ == "sqlite3" or "sqlite3" in type(exc).__qualname__:
-            message = f"the search index could not be used ({exc}); delete the brain's .kea folder and run kea ingest"
+            message = _index_error(exc)
         elif not isinstance(exc, known):
             message = f"{type(exc).__name__}: {exc}"
         if getattr(args, "json", False):

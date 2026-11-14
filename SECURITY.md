@@ -14,9 +14,11 @@ You will get an answer within a week.
   through `git log` and `git for-each-ref`.
 - **It refuses credential stores.** Paths with a segment such as `.ssh`, `.aws`, `.gnupg`, `.env` or `.env.local`,
   `.netrc`, shell histories, `.pem` or `.key` files, `credentials` or `secrets` are never opened, and a symbolic link
-  is judged by where it points; add your own patterns in `kea.toml` under `[ingest] deny`.
+  is judged by where it points and skipped if it leads out of a folder you ingest; add your own patterns in
+  `kea.toml` under `[ingest] deny`.
 - **It redacts secrets** shaped like API keys, tokens, private keys, passwords in URLs and `NAME_API_KEY=...` lines
-  before storing any text, before writing to the ledger, and before a council packet is built.
+  before storing any text and before a council packet is built. In the ledger, where you write your own words, only
+  unmistakable key shapes are replaced, so ordinary words are never changed.
 - **It keeps the index private**: `.kea/` is readable by you alone, and a forgotten source stays out of later scans.
 - **It sends data out only when you run the council.** `kea council` sends the packet (the files inside the brain
   named in `[brief] include`, and the plan, with secrets redacted) to the seats you configured, and asks first, naming

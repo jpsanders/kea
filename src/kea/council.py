@@ -11,6 +11,7 @@ alone, before reading any other seat.
 import concurrent.futures
 import hashlib
 import json
+import math
 import re
 import shutil
 import socket
@@ -364,7 +365,11 @@ def run(
     out_dir = brain.file("plans", slug, "reviews")
     out_dir.mkdir(parents=True, exist_ok=True)
     if resume:
-        done = {p.name.split("_")[1] for p in out_dir.glob("*_*_*.md")}
+        done = set()
+        for review in out_dir.glob("*.md"):
+            m = re.search(r"^\| Seat \| (.+?) \|$", review.read_text(encoding="utf-8")[:2000], re.M)
+            if m:
+                done.add(m[1].strip())
         chosen = [s for s in chosen if s.name not in done]
     if not chosen:
         raise CouncilError("no seat can run: set the API keys named in council/roster.toml, or start Ollama")
@@ -440,6 +445,10 @@ def parse_review(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _finite(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z]{4,}", text.lower()) if w not in STOP}
 
@@ -465,7 +474,7 @@ def cluster(recommendations: list[dict[str, Any]], threshold: float = 0.2) -> li
             groups.append({"words": set(words), "members": [rec]})
     out = []
     for group in groups:
-        confs = [m["confidence"] for m in group["members"] if isinstance(m.get("confidence"), (int, float))]
+        confs = [m["confidence"] for m in group["members"] if _finite(m.get("confidence"))]
         out.append(
             {
                 "label": max((m.get("claim", "") for m in group["members"]), key=len),
@@ -507,7 +516,7 @@ def synth(brain: Brain, slug: str) -> dict[str, Any]:
                 conf = rec.get("confidence")
                 rec = {
                     **rec,
-                    "confidence": conf if isinstance(conf, (int, float)) and not isinstance(conf, bool) else None,
+                    "confidence": conf if _finite(conf) else None,
                 }
                 recs.append({**rec, "seat": str(seat)})
     parsed = [r for r in reviews if r["data"]]

@@ -16,7 +16,7 @@ import pytest
 
 from kea import cli, council, ingest, ledger, mcp, providers
 from kea.brain import Brain, BrainError, default_brain, init, set_default_brain
-from kea.markdown import clean_part, read_lines
+from kea.markdown import clean_part, read_lines, write_lines
 from kea.providers import ProviderError, Seat
 from kea.redact import has_secret, is_denied, redact
 from kea.store import Item, Store
@@ -301,8 +301,10 @@ def test_init_refuses_home_and_git_inits_only_new_folders(tmp_path: Path) -> Non
     folder = tmp_path / "notes"
     folder.mkdir()
     (folder / "old.md").write_text("mine")
-    init(folder, git=True)
-    assert not (folder / ".git").exists()
+    with pytest.raises(BrainError, match="holds other files"):
+        init(folder, git=True)
+    init(folder, git=True, force=True)
+    assert not (folder / ".git").exists() and (folder / "old.md").read_text() == "mine"
     init(tmp_path / "new", git=True)
     assert (tmp_path / "new" / ".git").exists() or shutil.which("git") is None
 
@@ -371,7 +373,8 @@ def test_redirects_are_refused_and_odd_shapes_are_seat_errors(
 
 def test_seat_names_hosts_and_locality() -> None:
     with pytest.raises(ProviderError):
-        Seat.from_config({"name": "bad_name", "provider": "ollama", "model": "m"})
+        Seat.from_config({"name": "bad name", "provider": "ollama", "model": "m"})
+    assert Seat.from_config({"name": "my_seat", "provider": "ollama", "model": "m"}).name == "my_seat"
     cloud = Seat.from_config({"name": "c", "provider": "ollama", "model": "gpt-oss:120b-cloud"})
     relay = Seat.from_config({"name": "r", "provider": "ollama", "model": "qwen3", "remote": True})
     here = Seat.from_config({"name": "h", "provider": "ollama", "model": "qwen3"})
@@ -595,3 +598,255 @@ def test_sqlite_tombstones_table_exists(brain: Brain) -> None:
         names = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {"forgotten", "roots", "sources", "items"} <= names
     assert isinstance(sqlite3.sqlite_version, str)
+
+
+# ---------------------------------------------------------------- second round: the fixes' own regressions
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Food authority: Westminster Council inspected the roastery",
+        "Author: Jonathan Strange",
+        "Tokenizer: sentencepiece_model",
+        "Authorised: Christopher Wren approved",
+        "pwd: /home/ann/projects/shop",
+        "basic authentication-middleware",
+        "the basic reasoning is sound",
+        "oauth_url: https://example.com/callback",
+    ],
+)
+def test_ordinary_words_are_never_redacted(text: str) -> None:
+    assert redact(text) == text
+
+
+def test_ledger_writes_keep_ordinary_words(brain: Brain) -> None:
+    entry = ledger.log(brain, "Author: Bartholomew Jones signed. pwd: /home/ann/projects/shop")
+    assert entry["title"] == "Author: Bartholomew Jones signed"
+    assert "pwd: /home/ann/projects/shop" in brain.file("STATE.md").read_text()
+    assert "[REDACTED]" in ledger.log(brain, "rotated, the new one is ghp_" + "a1B2c3D4" * 5)["text"]
+
+
+@pytest.mark.parametrize("size", [20_000, 200_000])
+def test_redaction_runs_in_linear_time(size: int) -> None:
+    import time
+
+    start = time.perf_counter()
+    redact("deadbeef" * (size // 8))
+    redact("word: " * (size // 6))
+    assert time.perf_counter() - start < 2
+
+
+def test_set_writes_where_get_reads(brain: Brain) -> None:
+    ledger.predict(brain, "It ships", "+3d", 50)
+    path = brain.file("PREDICTIONS.md")
+    path.write_text(path.read_text().replace("- **Status:** OPEN", "- **Status:** OPEN\n- **Status:** OPEN (by hand)"))
+    assert ledger.score(brain, "1", "true")["status"] == "TRUE"
+    assert ledger.calibration(brain)["scored"] == 1
+
+
+def test_hand_written_headings_keep_their_separators(brain: Brain) -> None:
+    path = brain.file("PREDICTIONS.md")
+    path.write_text(path.read_text() + "\n### P-0009 | by 2026-12-01 | 70% | Hand claim\n\n- **Status:** OPEN\n")
+    assert ledger.predictions(brain)[0]["claim"] == "Hand claim"
+    ledger.score(brain, "9", "true")
+    assert "### P-0009 | by 2026-12-01 | 70% | Hand claim" in path.read_text()
+
+
+def test_one_crlf_line_does_not_convert_a_file(brain: Brain) -> None:
+    ideas = brain.file("IDEAS.md")
+    ideas.write_bytes(ideas.read_bytes().replace(b"\n", b"\r\n", 1))
+    ledger.idea(brain, "Mostly LF")
+    raw = ideas.read_bytes()
+    assert raw.count(b"\r\n") <= 1
+
+
+def test_concurrent_writes_never_fail(brain: Brain) -> None:
+    errors: list[BaseException] = []
+
+    def loop() -> None:
+        try:
+            for _ in range(50):
+                write_lines(brain.file("IDEAS.md"), read_lines(brain.file("IDEAS.md")))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=loop) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors and not list(brain.root.glob(".IDEAS.md.*"))
+
+
+def test_facts_after_a_blank_line_still_count(brain: Brain) -> None:
+    state = brain.file("STATE.md")
+    state.write_text(
+        state.read_text().replace(
+            "| --- | --- | --- | --- |",
+            "| --- | --- | --- | --- |\n| Cash | 5 | bank | 2026-11-01 |\n\n| Staff | 3 | payroll | 2026-11-01 |",
+        )
+    )
+    assert [f.fact for f in ledger.facts(brain)] == ["Cash", "Staff"]
+    ledger.set_fact(brain, "Staff", "4", "payroll")
+    assert state.read_text().count("| Staff |") == 1
+
+
+def test_nested_roadmap_items_list_and_close(brain: Brain) -> None:
+    path = brain.file("ROADMAP.md")
+    path.write_text(
+        path.read_text().replace("- [ ] Teach your agents", "- [ ] Parent\n  - [ ] Nested step\n- [ ] Teach")
+    )
+    view = ledger.roadmap(brain)
+    nested = [i for i in view["next"] if i["nested"]]
+    assert nested and nested[0]["text"] == "Nested step"
+    ledger.roadmap_done(brain, "Nested step")
+    assert "  - [x] Nested step" in path.read_text()
+
+
+def test_example_and_non_brain_folders(tmp_path: Path) -> None:
+    init(tmp_path / "real", git=False)
+    with pytest.raises(BrainError, match="example goes in a new folder"):
+        init(tmp_path / "real", example=True, git=False)
+    work = tmp_path / "code"
+    (work / "app").mkdir(parents=True)
+    with pytest.raises(BrainError, match="holds other files"):
+        init(work, git=False)
+
+
+def test_backups_never_collide(brain: Brain) -> None:
+    init(brain.root, force=True, git=False)
+    init(brain.root, force=True, git=False)
+    assert len(list(brain.file(".kea").glob("backup-*"))) == 2
+
+
+def test_opencode_honours_forget_and_deny(brain: Brain, tmp_path: Path) -> None:
+    db = tmp_path / "opencode.db"
+    con = sqlite3.connect(db)
+    con.executescript("""
+        CREATE TABLE session (id TEXT, title TEXT, directory TEXT);
+        CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT);
+        CREATE TABLE part (id TEXT, message_id TEXT, time_created INTEGER, data TEXT);
+        INSERT INTO session VALUES ('s1', 'Client', '/work/clientx'), ('s2', 'Mine', '/work/mine');
+        INSERT INTO message VALUES ('m1', 's1', 1, '{"role": "user"}'), ('m2', 's2', 2, '{"role": "user"}');
+        INSERT INTO part VALUES ('p1', 'm1', 1, '{"type": "text", "text": "client walrus"}');
+        INSERT INTO part VALUES ('p2', 'm2', 2, '{"type": "text", "text": "own walrus"}');
+        """)
+    con.commit()
+    con.close()
+    toml = brain.file("kea.toml")
+    toml.write_text(toml.read_text().replace("deny = []", 'deny = ["clientx"]'))
+    brain = Brain.load(brain.root)
+    with Store(brain.index_path) as store:
+        ingest.ingest(brain, store, "opencode", str(db))
+        assert [h["project"] for h in store.search("walrus")] == ["/work/mine"]
+        sid = next(s["id"] for s in store.sources() if s["kind"] == "opencode")
+        store.forget(sid)
+        ingest.ingest_known(brain, store)
+        assert store.search("walrus") == []
+
+
+def test_a_root_denied_later_is_dropped(brain: Brain, tmp_path: Path) -> None:
+    notes = tmp_path / "work" / "clientx" / "notes"
+    notes.mkdir(parents=True)
+    (notes / "a.md").write_text("platypus plans")
+    with Store(brain.index_path) as store:
+        ingest.ingest(brain, store, "docs", str(notes))
+        toml = brain.file("kea.toml")
+        toml.write_text(toml.read_text().replace("deny = []", 'deny = ["clientx"]'))
+        reports = ingest.ingest_known(Brain.load(brain.root), store)
+        assert any(r.dropped for r in reports) and store.search("platypus") == [] and store.roots() == []
+
+
+def test_brain_files_cannot_be_forgotten_and_digests_are_not_notes(brain: Brain) -> None:
+    (brain.root / "digests" / "s").mkdir(parents=True)
+    (brain.root / "digests" / "s" / "digest.md").write_text("private transcript words")
+    with Store(brain.index_path) as store:
+        ingest.refresh_brain(brain, store)
+        assert store.search("transcript", platform="brain") == []
+        sid = next(s["id"] for s in store.sources() if s["kind"] == "brain")
+        with pytest.raises(ValueError, match="always searchable"):
+            store.forget(sid)
+
+
+def test_a_symlinked_ledger_stays_searchable(brain: Brain, tmp_path: Path) -> None:
+    elsewhere = tmp_path / "sync"
+    elsewhere.mkdir()
+    shutil.move(brain.file("IDEAS.md"), elsewhere / "IDEAS.md")
+    os.symlink(elsewhere / "IDEAS.md", brain.file("IDEAS.md"))
+    ledger.idea(brain, "Echidna tours")
+    with Store(brain.index_path) as store:
+        ingest.refresh_brain(brain, store)
+        assert store.search("echidna", platform="brain")
+
+
+def test_partial_hits_are_marked_and_single_letters_ignored(brain: Brain, tmp_path: Path) -> None:
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_text("The quokka ate lunch.")
+    (notes / "b.md").write_text("A zebra crossed. It's raining.")
+    with Store(brain.index_path) as store:
+        ingest.ingest(brain, store, "docs", str(notes))
+        hits = store.search("quokka zebra")
+        assert {h["partial"] for h in hits} == {True} and len(hits) == 2
+        assert all(not h["partial"] for h in store.search("quokka lunch"))
+        assert store.search("Bob's quokka")[0]["partial"] is True
+
+
+def test_mcp_since_is_parsed_and_ingest_never_adds_defaults(example: Brain, tmp_path: Path) -> None:
+    server = mcp.Server(str(example.root))
+
+    def call(name: str, **args: Any) -> dict[str, Any]:
+        reply = server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}}
+        )
+        assert reply is not None
+        return reply
+
+    assert not call("search", query="wholesale", since="-30d")["result"]["isError"]
+    assert call("search", query="wholesale", since="lately")["result"]["isError"]
+    refused = call("ingest", source="codex")["result"]
+    assert refused["isError"] and "the user added" in refused["content"][0]["text"]
+
+
+def test_questions_go_to_stderr_and_index_errors_are_told_apart(
+    run: Run, brain: Brain, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_KEY", "k")
+    brain.file("council", "roster.toml").write_text(
+        '[[seat]]\nname = "x"\nprovider = "openai"\nbase_url = "https://example.invalid/v1"\nmodel = "m"\n'
+        'key_env = "MY_KEY"\n'
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("n\n"))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
+    code, out, err = run("--brain", str(brain.root), "seats", "--probe", "--json")
+    assert code == 1 and "Go ahead?" in err and "Go ahead?" not in out
+    assert "busy" in cli._index_error(sqlite3.OperationalError("database is locked"))
+    assert "cannot be written" in cli._index_error(sqlite3.OperationalError("attempt to write a readonly database"))
+    assert "damaged" in cli._index_error(sqlite3.DatabaseError("file is not a database"))
+
+
+def test_synth_ignores_non_finite_confidences(brain: Brain) -> None:
+    council.plan_new(brain, "p")
+    reviews = brain.file("plans", "p", "reviews")
+    (reviews / "2026-11-13_a_m.md").write_text(
+        '<!--COUNCIL-JSON {"seat": "a", "recommendations": [{"claim": "Do it", "confidence": NaN},'
+        ' {"claim": "Do it now", "confidence": Infinity}]} COUNCIL-JSON-->'
+    )
+    assert council.synth(brain, "p")["parsed"] == 1
+
+
+def test_resume_reads_the_seat_from_the_review(brain: Brain) -> None:
+    brain.file("council", "roster.toml").write_text('[[seat]]\nname = "my_seat"\nprovider = "lmstudio"\nmodel = "m"\n')
+    council.plan_new(brain, "p")
+    council.brief(brain, "p")
+    import kea.council as module
+
+    original = module._ready
+    module._ready = lambda seat: True
+    try:
+        council.run(brain, "p", ask=lambda seat, system, user: "review")
+        with pytest.raises(council.CouncilError, match="no seat can run"):
+            council.run(brain, "p", resume=True, ask=lambda seat, system, user: "again")
+    finally:
+        module._ready = original

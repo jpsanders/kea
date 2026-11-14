@@ -307,7 +307,8 @@ def init(
     Make a new brain from the bundled templates, or put back the files an existing brain is missing.
 
     On a folder that is already a brain, only missing files are written. ``force`` overwrites the rest too, after
-    copying each one to ``.kea/backup-<time>/``. ``git init`` runs only for a new or empty folder.
+    copying each one to ``.kea/backup-<time>/``, and is needed to turn a folder that holds other files into a brain.
+    The example only goes into a new folder. ``git init`` runs only for a new or empty folder.
 
     :param folder: Where to make it; created when missing
     :param name: The brain's name; the folder's name when omitted
@@ -316,12 +317,21 @@ def init(
     :param force: Overwrite files that already exist, keeping a backup of each
     :param git: Run ``git init`` when the folder is new or empty
     :returns: The files written, relative to the folder
-    :raises BrainError: When the folder is the home folder or the file system root
+    :raises BrainError: When the folder is the home folder or the root, holds other files without force, or the example
+        is asked for in an existing brain
     """
     folder = folder.expanduser().resolve()
     if folder == Path.home().resolve() or folder == Path(folder.anchor):
         raise BrainError(f"make the brain in a folder of its own, such as {Path.home() / 'brain'}, not in {folder}")
     fresh = not folder.exists() or not any(folder.iterdir())
+    existing = (folder / MARKER).is_file()
+    if example and existing:
+        raise BrainError(f"{folder} is already a brain; the example goes in a new folder: kea init /tmp/demo --example")
+    if not fresh and not existing and not force:
+        raise BrainError(
+            f"{folder} holds other files and is not a brain: make the brain in a new folder, such as "
+            f"{folder / 'brain'}, or pass --force to add kea's files here (any file it replaces is backed up first)"
+        )
     base = today()
     values = {
         "name": name or ("Tidewater Coffee" if example else folder.name.replace("-", " ").replace("_", " ").title()),
@@ -338,7 +348,10 @@ def init(
             parts[-1] = DOTFILES.get(parts[-1], parts[-1])
             planned["/".join(parts)] = item
     written = []
-    backup = folder / INDEX_DIR / f"backup-{now():%Y%m%d-%H%M%S}"
+    stamp = folder / INDEX_DIR / f"backup-{now():%Y%m%d-%H%M%S-%f}"
+    backup, n = stamp, 1
+    while backup.exists():
+        backup, n = stamp.with_name(f"{stamp.name}-{n}"), n + 1
     for rel, item in planned.items():
         target = folder / rel
         if target.exists():

@@ -54,6 +54,17 @@ def _state(brain: Brain, args: dict[str, Any]) -> Any:
     return ledger.state(brain, int(args.get("entries", 5)))
 
 
+def _since(brain: Brain, text: Any) -> str | None:
+    from kea.brain import parse_date
+
+    if not text:
+        return None
+    when = parse_date(str(text), brain.today())
+    if when is None:
+        raise ValueError(f"since takes a date such as 2026-11-01, today or -30d; not {text!r}")
+    return when.isoformat()
+
+
 def _search(brain: Brain, args: dict[str, Any]) -> Any:
     from kea.ingest import refresh_brain
     from kea.store import Store
@@ -65,7 +76,7 @@ def _search(brain: Brain, args: dict[str, Any]) -> Any:
             kind=args.get("kind"),
             platform=args.get("platform"),
             mine=bool(args.get("mine")),
-            since=args.get("since"),
+            since=_since(brain, args.get("since")),
             limit=min(int(args.get("limit", 10)), 50),
             any_word=bool(args.get("any")),
         )
@@ -227,30 +238,27 @@ def _council_run(brain: Brain, args: dict[str, Any]) -> Any:
 def _ingest(brain: Brain, args: dict[str, Any]) -> Any:
     from pathlib import Path
 
-    from kea.ingest import default_path, ingest, ingest_known
+    from kea.ingest import ingest, ingest_known
     from kea.store import Store
 
     with Store(brain.index_path) as store:
         if not args.get("source"):
             return [r.as_dict() for r in ingest_known(brain, store)]
         kind = str(args["source"])
-        known = {path for k, path in store.roots() if k == kind}
-        default = default_path(kind)
-        if default:
-            known.add(str(default.resolve()))
-        wanted = str(Path(args["path"]).expanduser().resolve()) if args.get("path") else None
-        if wanted and wanted not in known:
+        known = sorted(path for k, path in store.roots() if k == kind)
+        wanted = [str(Path(args["path"]).expanduser().resolve())] if args.get("path") else known
+        if not wanted or any(path not in known for path in wanted):
             raise ValueError(
                 "agents may only rescan sources the user added: the user adds new ones with kea ingest in a terminal"
             )
-        return ingest(brain, store, kind, wanted, revive=False).as_dict()
+        return [ingest(brain, store, kind, path, revive=False).as_dict() for path in wanted]
 
 
 def _effort(brain: Brain, args: dict[str, Any]) -> Any:
     from kea.store import Store
 
     with Store(brain.index_path) as store:
-        return store.effort(args.get("since"), bool(args.get("months")))
+        return store.effort(_since(brain, args.get("since")), bool(args.get("months")))
 
 
 ID = _s("an id such as D-0002 or P-0004, or just its number")
@@ -282,7 +290,7 @@ TOOLS: dict[str, tuple[str, dict[str, Any], Handler, bool, bool]] = {
                 "kind": _s("message, commit, doc or note", enum=["message", "commit", "doc", "note"]),
                 "platform": _s("claude-code, codex, opencode, chatgpt, claude, git, docs or brain"),
                 "mine": _s("only what the user wrote", "boolean"),
-                "since": _s("only items on or after this ISO date"),
+                "since": _s("only items on or after this date: 2026-11-01, today or -30d"),
                 "limit": _s("hits to return, default 10, at most 50", "integer", minimum=1, maximum=50),
                 "any": _s("match any word instead of every word", "boolean"),
             },
@@ -343,7 +351,7 @@ TOOLS: dict[str, tuple[str, dict[str, Any], Handler, bool, bool]] = {
     ),
     "effort": (
         "Where attention went: the user's own prompts to AI agents per project, optionally per month.",
-        _schema({"since": _s("ISO date"), "months": _s("split by month", "boolean")}),
+        _schema({"since": _s("a date: 2026-11-01, today, -90d"), "months": _s("split by month", "boolean")}),
         _effort,
         True,
         False,
@@ -493,14 +501,15 @@ TOOLS: dict[str, tuple[str, dict[str, Any], Handler, bool, bool]] = {
         True,
     ),
     "ingest": (
-        "Rescan the local index: with no source, everything known; with a source, its usual place or a path the user "
-        "added before. What it reads becomes searchable through search and show, and so can reach you.",
+        "Rescan the local index: with no source, everything the user added; with a source, the folders the user "
+        "added for it (or one of them, by path). What it reads becomes searchable through search and show, and so "
+        "can reach you.",
         _schema(
             {
                 "source": _s(
                     "the adapter", enum=["claude-code", "codex", "opencode", "chatgpt", "claude", "git", "docs"]
                 ),
-                "path": _s("what to read; the adapter's default when omitted"),
+                "path": _s("one of the folders or files the user added for this source"),
             }
         ),
         _ingest,

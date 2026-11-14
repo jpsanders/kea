@@ -7,8 +7,9 @@ description: Work with the user's kea second brain, a folder of plain Markdown t
 
 kea keeps a person's facts, decisions, predictions and plans in a folder of plain Markdown, and a local SQLite index
 over their past AI sessions, chat exports, git history and notes. You reach it through the `kea` command (every
-command takes `--json`) or the kea MCP server (tools such as `brain_status`, `search`, `log_entry`). Both find the
-brain the same way: `--brain`, then `$KEA_BRAIN`, then the current folder and its parents, then the user's default.
+command takes `--json`) or the kea MCP server (tools such as `brain_status`, `search`, `log_entry`). The CLI finds the
+brain from `--brain`, then `$KEA_BRAIN`, then the current folder and its parents, then the user's default; the MCP
+server tries the default before the folders, and its initialize message names the brain in use.
 
 If `kea` is not installed: `uv tool install --python 3.15 git+https://github.com/jpsanders/kea` (uv fetches 3.15).
 If there is no brain yet, ask the user where it should live, then `kea init <folder>`.

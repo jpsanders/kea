@@ -75,6 +75,7 @@ class Report:
     unchanged: int = 0
     skipped: int = 0
     dropped: int = 0
+    forgotten: int = 0
     items: int = 0
     bad_records: int = 0
     errors: list[str] = field(default_factory=list)
@@ -332,8 +333,11 @@ def _sessions(
 ) -> set[str]:
     seen: set[str] = set()
     for path in files:
-        if is_denied(path, deny) or store.is_forgotten(kind, str(path)):
+        if is_denied(path, deny):
             report.skipped += 1
+            continue
+        if store.is_forgotten(kind, str(path)):
+            report.forgotten += 1
             continue
         seen.add(str(path))
         try:
@@ -362,7 +366,10 @@ def _sessions(
     return seen
 
 
-def _opencode(store: Store, report: Report, db: Path, sig: str, force: bool) -> None:
+def _opencode(store: Store, report: Report, db: Path, deny: list[str], sig: str, force: bool) -> None:
+    if store.is_forgotten("opencode", str(db)):
+        report.forgotten += 1
+        return
     wal = db.with_name(db.name + "-wal")
     mark = fingerprint(db) + (f"+{fingerprint(wal)}" if wal.exists() else "") + f"|{sig}"
     sid, old = store.source("opencode", str(db), "OpenCode")
@@ -399,6 +406,9 @@ def _opencode(store: Store, report: Report, db: Path, sig: str, force: bool) -> 
             except ValueError, TypeError, RecursionError:
                 role = "assistant"
             session = sessions.get(row["session_id"])
+            if session and session["directory"] and is_denied(str(session["directory"]), deny):
+                report.skipped += 1
+                continue
             n = seq.get(row["session_id"], 0)
             seq[row["session_id"]] = n + 1
             items.append(
@@ -591,7 +601,7 @@ def parse_claude_export(path: Path) -> Parsed:
 
 def _export(store: Store, report: Report, kind: str, path: Path, sig: str, force: bool) -> None:
     if store.is_forgotten(kind, str(path)):
-        report.skipped += 1
+        report.forgotten += 1
         return
     mark = (fingerprint(path) if path.is_file() else _tree_mark(path)) + f"|{sig}"
     sid, old = store.source(kind, str(path), path.name)
@@ -711,8 +721,11 @@ def _git(brain: Brain, store: Store, report: Report, path: Path, deny: list[str]
     emails, names = _identity(brain)
     seen = set()
     for repo in find_repos(path):
-        if is_denied(repo.resolve(), deny) or store.is_forgotten("git", str(repo)):
+        if is_denied(repo.resolve(), deny):
             report.skipped += 1
+            continue
+        if store.is_forgotten("git", str(repo)):
+            report.forgotten += 1
             continue
         seen.add(str(repo))
         mark = f"{_git_mark(repo)}|{sig}"
@@ -786,7 +799,7 @@ def sections(path: Path, platform: str, ref_base: str, project: str | None) -> l
     ]
 
 
-def _readable(path: Path, root: Path, deny: list[str]) -> bool:
+def _readable(path: Path, root: Path, deny: list[str], outside_links: bool = False) -> bool:
     """Tell whether kea may read a text file: right suffix, not hidden or too big, not denied, not linked outside."""
     if path.name.startswith(".") or path.suffix.lower() not in TEXT_SUFFIXES:
         return False
@@ -798,23 +811,24 @@ def _readable(path: Path, root: Path, deny: list[str]) -> bool:
         return False
     if is_denied(path, deny) or is_denied(target, deny):
         return False
-    return not path.is_symlink() or target.is_relative_to(root.resolve())
+    return outside_links or not path.is_symlink() or target.is_relative_to(root.resolve())
 
 
-def text_files(folder: Path, deny: list[str], skip: tuple[Path, ...] = ()) -> list[Path]:
+def text_files(folder: Path, deny: list[str], skip: tuple[Path, ...] = (), outside_links: bool = False) -> list[Path]:
     """
     List the text files under a folder, leaving out hidden, build and denied paths, and links that point outside it.
 
     :param folder: Where to look
     :param deny: Extra path patterns to leave out
     :param skip: Folders to leave out entirely
+    :param outside_links: Accept links that point outside the folder (the brain's own files may live elsewhere)
     :returns: The files
     """
     out = []
     for root, dirs, files in os.walk(folder):
         here = Path(root)
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS and (here / d) not in skip)
-        out += [here / name for name in sorted(files) if _readable(here / name, folder, deny)]
+        out += [here / name for name in sorted(files) if _readable(here / name, folder, deny, outside_links)]
     return out
 
 
@@ -826,15 +840,16 @@ def _docs(
             raise ValueError(f"refused: {folder} is not a readable text file (.md, .txt, .rst, .org, not hidden)")
         files = [folder]
     elif platform == "brain":
-        skip = (folder / INDEX_DIR, folder / "council" / "briefing", folder / "plans" / "_template")
-        files = [p for p in text_files(folder, deny, skip) if str(p.relative_to(folder)) not in BRAIN_BOILERPLATE]
+        skip = (folder / INDEX_DIR, folder / "council" / "briefing", folder / "plans" / "_template", folder / "digests")
+        found = text_files(folder, deny, skip, outside_links=True)
+        files = [p for p in found if str(p.relative_to(folder)) not in BRAIN_BOILERPLATE]
     else:
         files = text_files(folder, deny)
     kind = "brain" if platform == "brain" else "docs"
     seen = set()
     for path in files:
         if store.is_forgotten(kind, str(path)):
-            report.skipped += 1
+            report.forgotten += 1
             continue
         seen.add(str(path))
         mark = f"{fingerprint(path)}|{sig}"
@@ -917,7 +932,7 @@ def ingest(
         if target.is_dir():
             report.dropped = store.drop_missing(kind, seen, str(target))
     elif kind == "opencode":
-        _opencode(store, report, target, sig, force)
+        _opencode(store, report, target, deny, sig, force)
     elif kind in ("chatgpt", "claude"):
         _export(store, report, kind, target, sig, force)
     elif kind == "git":
@@ -938,7 +953,11 @@ def ingest_known(brain: Brain, store: Store, force: bool = False) -> list[Report
     :returns: One report per source
     """
     reports = [refresh_brain(brain, store, force)]
+    deny = _deny(brain)
     for kind, path in store.roots():
+        if is_denied(path, deny):
+            reports.append(Report(kind, path, dropped=store.drop_root(kind, path)))
+            continue
         try:
             reports.append(ingest(brain, store, kind, path, force, revive=False))
         except Exception as exc:  # noqa: BLE001  one broken root must not stop the rescan of the others

@@ -25,10 +25,12 @@ def test_init_keeps_existing_files_unless_forced(tmp_path: Path) -> None:
     folder = tmp_path / "b"
     folder.mkdir()
     (folder / "STATE.md").write_text("mine")
-    init(folder, git=False)
+    with pytest.raises(BrainError, match="holds other files"):
+        init(folder, git=False)
     assert (folder / "STATE.md").read_text() == "mine"
     init(folder, git=False, force=True)
     assert (folder / "STATE.md").read_text() != "mine"
+    assert [p.read_text() for p in folder.glob(".kea/backup-*/STATE.md")] == ["mine"]
 
 
 def test_init_runs_git_when_asked(tmp_path: Path) -> None:
@@ -62,6 +64,7 @@ def test_locate_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_default_brain_config_keeps_other_lines(tmp_path: Path) -> None:
+    tmp_path = tmp_path / "b"
     init(tmp_path, git=False)
     config = brain_mod.user_config_path()
     config.parent.mkdir(parents=True, exist_ok=True)
