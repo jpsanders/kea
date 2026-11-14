@@ -96,6 +96,23 @@ SECRETS = [
     ("password=data.staple", "data.staple"),
     ("DB_PASSWORD=$ecretsauce", "$ecretsauce"),
     ("password=$moneybags", "$moneybags"),
+    # Any space but a line break around the separator, a no break space from a web page included.
+    ("password:\xa0Hunter2Secret99", "Hunter2Secret99"),
+    ("DB_PASSWORD:\xa0Hunter2Secret99", "Hunter2Secret99"),
+    ("Password\xa0: Hunter2Secret99", "Hunter2Secret99"),
+    ("API_KEY=\u202fZx81Qw93Er72Ty64", "Zx81Qw93Er72Ty64"),
+    # Dotted passwords whose last part looks like a code name.
+    ("DB_PASSWORD=john.smith_1985", "john.smith_1985"),
+    ("password=summer.holidayFun", "summer.holidayFun"),
+    ("password=Admin.pass_2026", "Admin.pass_2026"),
+    # -u with a user named like a scheme, an email user, no space, a URL host word, a $ password.
+    ("curl -u git:Hunter2Secret99 https://gitea.local/api/v1/user", "Hunter2Secret99"),
+    ("curl -u ci+bot:Hunter2Secret99 https://x", "Hunter2Secret99"),
+    ("curl -u me@example.com:Hunter2Secret99 https://jira.example.com/rest/api/2/myself", "Hunter2Secret99"),
+    ("curl -uadmin:Hunter2Secret99 https://x", "Hunter2Secret99"),
+    ("curl -X GET https://docker.example.com/v2/_catalog -u admin:supersecretpassword", "supersecretpassword"),
+    ("curl https://git.example.com/api/v1/user -u admin:Summer.Holiday.2026", "Summer.Holiday.2026"),
+    ("curl -u admin:$Hunter2Secret99 https://x", "Hunter2Secret99"),
 ]
 # Text that must stay exactly as it is, at both strengths.
 KEEP = [
@@ -187,6 +204,12 @@ KEEP = [
     # A pair never crosses a blank line.
     "Password:\n\nEverything is fine here",
     "set OPENAI_API_KEY =\n\nGenerated a fresh one",
+    "password = form_data.new_password",
+    "token = response_json.access_token",
+    "password = self.accessToken",
+    "docker run -u1000:1000 app",
+    "curl -u admin:${DB_PASS} https://x",
+    "rsync -u deploy@host:/srv/app ./",
 ]
 
 
@@ -202,6 +225,8 @@ def test_ordinary_text_code_and_commands_are_kept(text: str) -> None:
 
 def test_the_ledger_hides_dotted_passphrases_and_keeps_nested_calls() -> None:
     assert "this.is.secret" not in redact("DB_PASSWORD=this.is.secret", generic=False)
+    assert "john.smith_1985" not in redact("DB_PASSWORD=john.smith_1985", generic=False)
+    assert "Hunter2Secret99" not in redact("DB_PASSWORD:\xa0Hunter2Secret99", generic=False)
     kept = "SECRET_KEY = hashlib.sha256(os.urandom(32)).hexdigest()"
     assert redact(kept, generic=False) == kept
 

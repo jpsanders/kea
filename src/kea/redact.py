@@ -139,14 +139,15 @@ _STRING_PREFIXES = {"r", "b", "f", "u", "rb", "br", "fr", "rf"}
 # name: value and name=value. A name is judged in code, and the scan never consumes a value it keeps, so a pair inside
 # another value (a URL's query, a JDBC string) is still found. In a URL query a value ends at the next &. A name starts
 # only where no other name character stands before it, so a long run of name characters is scanned once.
-_GAP = r"[\"']?[ \t]*[:=][ \t]*(?:\r?\n[ \t]*)?[\"']?"  # a value on the same line or the next, never past a blank line
+# A value on the same line or the next, never past a blank line; any space but a line break, a no break space included.
+_GAP = r"[\"']?[^\S\r\n]*[:=][^\S\r\n]*(?:\r?\n[^\S\r\n]*)?[\"']?"
 NAMED = re.compile(rf"(?<![\w.\-])(?P<name>-{{0,2}}[A-Za-z_][\w.\-]{{0,254}}){_GAP}(?P<v>[^\s\"',;]{{8,512}})")
 UPPER = re.compile(rf"(?<![A-Za-z0-9_.])(?P<name>[A-Z][A-Z0-9_]{{0,254}}){_GAP}(?P<v>[^\s\"',;]{{8,512}})")
 _VALUE_END = frozenset("\"',;")
 BEARER = re.compile(r"(?i)\b(?:bearer|token)\s+(?P<v>[A-Za-z0-9_\-.=~+/]{20,})")
 BASIC = re.compile(r"(?i)\bbasic\s+(?P<v>[A-Za-z0-9+/]{8,}={0,2})(?![\w\-])")
 COOKIE = re.compile(r"(?im)^[ \t]*(?:set-)?cookie:[ \t]*(?P<v>\S[^\r\n]{7,})")
-USER_FLAG = re.compile(r"(?<!\S)(?:-u|--user)\s+(?P<user>[^\s:@/]{1,64}):(?P<v>\S{1,128})")
+USER_FLAG = re.compile(r"(?<!\S)(?:-u[^\S\r\n]*|--user[^\S\r\n]+)(?P<user>[^\s:/]{1,64}):(?P<v>\S{1,128})")
 GENERIC = (BEARER, BASIC, COOKIE, USER_FLAG)
 
 # Values that are code, not secrets. Each shape is tight, so a random token or a person's password almost never fits
@@ -187,11 +188,10 @@ _UPPER_CHARS = re.compile(r"[A-Z]")
 _LOWER = "abcdefghijklmnopqrstuvwxyz"
 # How people name things in code: snake_case, camelCase and PascalCase words, or an UPPER_CASE constant.
 _NAMED_LIKE = re.compile(r"(?:[A-Z]{2,}(?=[A-Z][a-z]{2}))?[A-Za-z_][a-z0-9_]*(?:[A-Z][a-z0-9_]+)*|[A-Z][A-Z0-9_]*")
-_SCHEMES = {"http", "https", "ssh", "git", "ftp", "sftp", "file"}
 _CONTAINERS = {"docker", "podman", "nerdctl", "kubectl", "ctr", "buildah", "singularity", "apptainer"}
-_TOOL = re.compile(r"\b(curl|wget|http|https|git|" + "|".join(sorted(_CONTAINERS)) + r")\b")
+_TOOL = re.compile(r"(?<!\S)(curl|wget|git|" + "|".join(sorted(_CONTAINERS)) + r")(?!\S)")
 _COMMAND_END = re.compile(r"&&|\|\||[;|\n]|\s--\s")
-_VARIABLE = re.compile(r"\$\{?[A-Za-z_]\w*\}?")
+_VARIABLE = re.compile(r"\$\{?(?P<name>[A-Za-z_]\w*)\}?")
 _VAR_WORDS = {"password", "passwd", "pass", "pw", "pwd", "token", "secret", "secrets", "key", "apikey", "auth"}
 _VAR_WORDS |= {"credential", "credentials"}
 _ATTRIBUTES = {
@@ -209,6 +209,8 @@ _ATTRIBUTES = {
     "query",
 }
 _ATTRIBUTES |= {"body", "get"}
+# The words that make an attribute of an unknown object code: form_data.new_password, tokenizer.eos_token.
+_CHAIN_WORDS = {"password", "passwd", "token", "secret", "secrets", "key", "apikey", "credential", "credentials"}
 
 
 def _words(name: str) -> list[str]:
@@ -298,8 +300,9 @@ def _callable(value: str, rest: str) -> bool:
 
 
 def _codey(segment: str) -> bool:
-    """Tell whether a name was written for code: snake_case, camelCase or an UPPER_CASE constant."""
-    return _CODEY.fullmatch(segment.strip("_")) is not None
+    """Tell whether a name was written for code: snake_case, camelCase or an UPPER_CASE constant; never smith_1985."""
+    inner = segment.strip("_")
+    return _CODEY.fullmatch(inner) is not None and re.search(r"_\d+$", inner) is None
 
 
 def _attribute_chain(value: str) -> bool:
@@ -318,11 +321,17 @@ def _attribute_chain(value: str) -> bool:
             # self.password, config.token and os.environ, not data.state or auth.tiger
             only = segments[0]
             return _codey(only) or only in _ATTRIBUTES or any(w in _VAR_WORDS for w in _words(only))
-        if any(_codey(s) for s in segments):
-            return True
-    if _ROOT_LIKE.fullmatch(m["root"]) is None:
+        return any(_codey(s) for s in segments)  # process.env.GITHUB_TOKEN, not this.is.my.password
+    if _ROOT_LIKE.fullmatch(m["root"]) is None or not all(_NAMED_LIKE.fullmatch(s) for s in segments):
         return False
-    return _codey(segments[-1]) and all(_NAMED_LIKE.fullmatch(s) for s in segments)
+    # From any other object: a constant at the end (django.conf.settings.SECRET_KEY), or one attribute that says what
+    # it holds (tokenizer.eos_token, form_data.new_password); never john.smith_1985 or summer.holidayFun.
+    last = segments[-1]
+    if _CONSTANT.fullmatch(last):
+        return True
+    if len(segments) > 1 or re.search(r"\d", last):
+        return False
+    return any(w in _CHAIN_WORDS or w in _ATTRIBUTES for w in _words(last))
 
 
 def _is_code(value: str, rest: str) -> bool:
@@ -363,18 +372,28 @@ def _basic_credentials(value: str) -> bool:
     return b":" in decoded and all(32 <= b < 127 for b in decoded)
 
 
+def _is_variable(value: str) -> bool:
+    """Tell whether a value is a shell variable: $GID, ${DB_PASS}, $password; not $Hunter2Secret99."""
+    m = _VARIABLE.fullmatch(value)
+    if m is None or _tokenish_value(m["name"]):
+        return False
+    name = m["name"]
+    return name.isupper() or (name.islower() and any(w in _VAR_WORDS for w in _words(name)))
+
+
 def _user_flag_kept(match: re.Match[str]) -> bool:
     """
     Tell whether ``-u a:b`` is not a user and password: a uid and gid, a URL, a variable, a git revision or a group.
 
     The command the flag belongs to decides, read from the last ``&&``, ``||``, ``;``, ``|`` or `` -- `` before it
-    and at most 200 characters back: ``docker exec box curl -u`` and ``git pull && curl -u`` are curl.
+    and at most 200 characters back, and only whole words count: ``docker exec box curl -u``, ``git pull && curl -u``
+    and ``curl https://docker.example.com -u`` are all curl.
     """
     user, value = match.group("user"), match.group("v")
-    if value.isdigit() or value == user or value.startswith("//") or _VARIABLE.fullmatch(value):
+    if value.isdigit() or value == user or value.startswith("//") or _is_variable(value):
         return True  # docker -u 1000:1000, pip install --user git+https://..., curl -u admin:$PASSWORD
-    if "+" in user or user.lower() in _SCHEMES:
-        return True  # a URL: pip install --user https://..., az login -u http://app
+    if "@" in user and re.fullmatch(r"[/~][\w.\-/~]*", value) and not _tokenish_value(value):
+        return True  # rsync -u deploy@host:/srv/app: a host and a path
     window = match.string[max(0, match.start() - 200) : match.start()]
     tools = _TOOL.findall(_COMMAND_END.split(window)[-1])
     tool = tools[-1] if tools else ""

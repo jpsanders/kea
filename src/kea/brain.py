@@ -10,7 +10,7 @@ import calendar
 import os
 import re
 import shutil
-import subprocess  # nosec B404: runs git init with fixed arguments only
+import subprocess  # nosec B404: runs git init and git rev-parse with fixed arguments only
 import tomllib
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -279,18 +279,25 @@ def _merge_gitignore(target: Path, text: str, written: list[str], notes: list[st
     Add kea's ignore lines to a .gitignore people wrote, skipping lines they already have or negate.
 
     The file keeps its own bytes and line endings: kea appends ASCII lines, which is safe in UTF-8, Latin-1 and every
-    encoding that keeps ASCII as it is. git reads neither a linked nor a UTF-16 .gitignore, so for those kea writes
-    its lines to ``.git/info/exclude``, which git reads on this machine only, or says what to do when there is no
-    repository yet.
+    encoding that keeps ASCII as it is. git reads neither a linked nor a UTF-16 .gitignore, and cannot read one it
+    has no permission for, so for those kea writes its lines to the repository's ``info/exclude``, which git reads on
+    this machine only, or says what to do when the folder is in no repository.
     """
     wanted = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
     try:
         raw: bytes | None = target.read_bytes()
     except OSError:
         raw = None
-    unusable = target.is_symlink() or raw is None or raw.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw
-    if unusable or raw is None:
-        _exclude(target.parent, wanted, written, notes)
+    if target.is_symlink():
+        why = "git does not read a .gitignore that is a link"
+    elif raw is None:
+        why = "your .gitignore cannot be read"
+    elif raw.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw:
+        why = "git does not read a .gitignore in UTF-16"
+    else:
+        why = ""
+    if why or raw is None:
+        _exclude(target.parent, wanted, notes, why or "your .gitignore cannot be read")
         return
     have = {line.strip().lstrip("!") for line in raw.decode("latin-1").splitlines()}
     missing = [line for line in wanted if line.strip() not in have]
@@ -303,35 +310,50 @@ def _merge_gitignore(target: Path, text: str, written: list[str], notes: list[st
     written.append(".gitignore")
 
 
-def _exclude(folder: Path, wanted: list[str], written: list[str], notes: list[str]) -> None:
-    """Keep kea's private folders out of git when the .gitignore cannot do it: through .git/info/exclude."""
+def _git_exclude(folder: Path) -> tuple[Path, str] | None:
+    """Ask git where the repository holding a folder keeps info/exclude, and the folder's path from its top."""
+    git_bin = shutil.which("git")
+    if not git_bin:
+        return None
+    proc = subprocess.run(  # nosec B603: git rev-parse, fixed arguments, the folder as a separate argument
+        [git_bin, "-C", str(folder), "rev-parse", "--git-path", "info/exclude", "--show-prefix"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    lines = proc.stdout.splitlines()
+    if proc.returncode != 0 or not lines:
+        return None
+    path = Path(lines[0])
+    return (path if path.is_absolute() else folder / path), (lines[1] if len(lines) > 1 else "")
+
+
+def _exclude(folder: Path, wanted: list[str], notes: list[str], why: str) -> None:
+    """Keep kea's private folders out of git when the .gitignore cannot do it: through the repository's exclude file."""
     lines = ", ".join(wanted)
-    git_dir = folder / ".git"
-    if not git_dir.is_dir() or git_dir.is_symlink():
+    found = _git_exclude(folder)
+    if found is None:
         notes.append(
-            f"git reads neither a linked nor a UTF-16 .gitignore: before you use git here, make .gitignore a regular "
-            f"UTF-8 file that holds {lines}"
+            f"{why}: make .gitignore a regular, readable UTF-8 file that holds {lines}, before you use git here"
         )
         return
-    exclude = git_dir / "info" / "exclude"
+    exclude, prefix = found
+    # A pattern with a slash inside is anchored at the top of the repository, so it needs the brain's own path.
+    patterns = [f"/{prefix}{line.lstrip('/')}" if "/" in line.rstrip("/") else line for line in wanted]
     try:
         current = exclude.read_bytes().decode("latin-1") if exclude.is_file() else ""
         have = {line.strip() for line in current.splitlines()}
-        missing = [line for line in wanted if line.strip() not in have]
+        missing = [line for line in patterns if line.strip() not in have]
         if missing:
             exclude.parent.mkdir(parents=True, exist_ok=True)
             start = current.rstrip("\r\n") + "\n\n" if current.strip() else ""
             exclude.write_bytes((start + "\n".join(["# kea", *missing]) + "\n").encode("latin-1"))
-            written.append(".git/info/exclude")
     except OSError as exc:
         notes.append(
-            f"git reads neither a linked nor a UTF-16 .gitignore, and .git/info/exclude failed ({exc}): add {lines}"
+            f"{why}, and git's exclude file could not be written ({exc.strerror or exc}): add {lines} yourself"
         )
         return
-    notes.append(
-        f"git reads neither a linked nor a UTF-16 .gitignore, so kea put {lines} in .git/info/exclude, which git "
-        "reads on this machine only"
-    )
+    notes.append(f"{why}, so kea put {lines} in {exclude}, which git reads on this machine only")
 
 
 def last_backup(folder: Path) -> Path | None:
@@ -447,7 +469,7 @@ def init(
                 ("/".join(parts[:i]) for i in range(1, len(parts)) if (folder / "/".join(parts[:i])).is_symlink()),
                 parts[0],
             )
-            if not (target.exists() or target.is_symlink()):
+            if force or not (target.exists() or target.is_symlink()):
                 left_out.setdefault(link, []).append(rel)
             continue
         text = _render(item.read_text(encoding="utf-8"), values, base)
@@ -458,6 +480,11 @@ def init(
         linked = target.is_symlink()
         if target.exists() or linked:
             if not force:
+                if linked and not target.exists():
+                    notes.append(
+                        f"{rel} is a link to {os.readlink(target)}, which is missing, and kea init never writes "
+                        f"through a link: restore that file, or remove the link and run kea init again"
+                    )
                 continue
             saved = backup / rel
             saved.parent.mkdir(parents=True, exist_ok=True)
@@ -469,8 +496,8 @@ def init(
         written.append(rel)
     for link, rels in left_out.items():
         notes.append(
-            f"{link}/ is a link to a folder outside the brain, so kea did not write {', '.join(rels)}: copy them there "
-            f"yourself, or make {link}/ a regular folder"
+            f"{link}/ is a link to a folder outside the brain, so kea did not write {', '.join(rels)}: copy them "
+            f"there yourself, or make {link}/ a regular folder"
         )
     (folder / INDEX_DIR).mkdir(mode=0o700, exist_ok=True)
     git_bin = shutil.which("git")

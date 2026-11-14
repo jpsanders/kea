@@ -1074,7 +1074,7 @@ def test_gitignore_merge_respects_negations_bytes_and_links(tmp_path: Path) -> N
     notes: list[str] = []
     assert ".gitignore" not in init(wide, add=True, git=False, notes=notes)
     assert (wide / ".gitignore").read_bytes() == "build/\n".encode("utf-16")
-    assert notes and ".kea/" in notes[0] and "regular UTF-8 file" in notes[0]
+    assert notes and ".kea/" in notes[0] and "regular, readable UTF-8 file" in notes[0]
     shared = tmp_path / "shared-ignore"
     shared.write_text("shared/\n")
     linked = tmp_path / "linked"
@@ -1083,7 +1083,7 @@ def test_gitignore_merge_respects_negations_bytes_and_links(tmp_path: Path) -> N
     notes = []
     init(linked, add=True, git=False, notes=notes)
     assert shared.read_text() == "shared/\n" and (linked / ".gitignore").is_symlink()
-    assert notes and "linked" in notes[0]
+    assert notes and "is a link" in notes[0]
 
 
 def test_kea_folder_is_private_after_a_forced_init(tmp_path: Path) -> None:
@@ -1301,3 +1301,73 @@ def test_init_names_the_files_it_left_out_of_a_linked_folder(run: Run, tmp_path:
     assert list(outside.iterdir()) == []
     code, out, _ = run("init", str(vault), "--no-git", "--no-default")
     assert "put back nothing" in out and "council/roster.toml" in out
+
+
+# ---------------------------------------------------------------- the seventh round
+
+
+def _git(*argv: str) -> str:
+    env = {**os.environ, "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@example.com"}
+    env |= {"GIT_COMMITTER_NAME": "a", "GIT_COMMITTER_EMAIL": "a@example.com"}
+    return subprocess.run(["git", *argv], capture_output=True, text=True, check=True, env=env).stdout
+
+
+def _untracked(repo: Path) -> str:
+    return _git("-C", str(repo), "status", "--porcelain", "--untracked-files=all")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_a_brain_in_a_subfolder_or_a_worktree_stays_out_of_git(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "-q", str(repo))
+    _git("-C", str(repo), "commit", "-q", "--allow-empty", "-m", "start")
+    _git("-C", str(repo), "worktree", "add", "-q", str(tmp_path / "wt"))
+    for folder in (repo / "notes" / "brain", tmp_path / "wt" / "brain"):
+        folder.mkdir(parents=True)
+        (folder / ".gitignore").write_bytes("build/\n".encode("utf-16"))
+        notes: list[str] = []
+        init(folder, add=True, git=False, notes=notes)
+        assert notes and "info/exclude" in notes[0] and "UTF-16" in notes[0]
+        (folder / ".kea" / "index.sqlite").write_text("x")
+        (folder / "digests" / "d.md").parent.mkdir(exist_ok=True)
+        (folder / "digests" / "d.md").write_text("x")
+        (folder / "council" / "briefing").mkdir(parents=True, exist_ok=True)
+        (folder / "council" / "briefing" / "p.md").write_text("x")
+        status = _untracked(folder)
+        assert ".kea/" not in status and "digests/" not in status and "briefing/" not in status, status
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_an_unreadable_gitignore_gets_its_own_reason(tmp_path: Path) -> None:
+    folder = tmp_path / "locked"
+    folder.mkdir()
+    ignore = folder / ".gitignore"
+    ignore.write_text("build/\n")
+    ignore.chmod(0)
+    notes: list[str] = []
+    try:
+        init(folder, add=True, git=False, notes=notes)
+    finally:
+        ignore.chmod(0o644)
+    assert notes and "cannot be read" in notes[0] and "UTF-16" not in notes[0]
+
+
+def test_init_names_a_dangling_link_and_what_force_left_in_a_linked_folder(
+    run: Run, brain: Brain, tmp_path: Path
+) -> None:
+    gone = tmp_path / "synced" / "STATE.md"
+    state = brain.file("STATE.md")
+    state.unlink()
+    os.symlink(gone, state)
+    code, out, _ = run("init", str(brain.root), "--no-git", "--no-default")
+    assert code == 0 and "STATE.md is a link" in out and "which is missing" in out
+    assert not gone.exists()
+    shared = tmp_path / "shared-council"
+    shutil.move(str(brain.file("council")), shared)
+    os.symlink(shared, brain.file("council"))
+    state.unlink()
+    state.write_text("# State\n")
+    code, out, _ = run("init", str(brain.root), "--force", "--no-git", "--no-default")
+    assert code == 0 and "council/ is a link" in out and "council/roster.toml" in out
+    assert (shared / "roster.toml").read_text() != ""

@@ -30,7 +30,7 @@ The first release.
   credential paths such as `.ssh`, `.env.local`, shell histories and `.pem` files are refused, symbolic links
   included; the index is private to you; requests follow no redirects; agents on MCP can neither add sources nor send
   a packet off the machine unless `kea.toml` allows it.
-  Before release, three independent review agents found 56 issues. Five further rounds, by two more agents each,
+  Before release, three independent review agents found 56 issues. Six further rounds, by two more agents each,
   checked the fixes and found more problems in them. Every confirmed problem is fixed, and each code fix is pinned by
   a test.
 - `kea digest` turns a Claude Code transcript into private readable files in the brain's `digests/` folder.
