@@ -35,7 +35,7 @@ your machine except a council packet you choose to send.
 
 ```sh
 uv self update                                          # or brew upgrade uv, or pip install -U uv
-uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 if missing
+uv tool install --python 3.15 kea-brain                # uv fetches Python 3.15 if missing
 kea init ~/brain                                        # make a brain; it becomes your default
 cd ~/brain && kea status                                # the whole brain at a glance
 kea skill install                                       # teach Claude Code, Codex and OpenCode
@@ -286,7 +286,7 @@ command there.
 {"mcpServers": {"kea": {"command": "kea", "args": ["mcp"], "env": {"KEA_BRAIN": "/home/you/brain"}}}}
 ```
 
-Without kea installed, use `uvx` as the command and `--python 3.15 --from git+https://github.com/jpsanders/kea kea
+Without kea installed, use `uvx` as the command and `--python 3.15 --from kea-brain kea
 mcp` as the arguments; the first start downloads it, and an older uv knows only the 3.15 previews, so update uv first
 (QUICK START). Set `KEA_BRAIN` where the client starts servers outside your projects.
 

@@ -10,7 +10,7 @@
     {
       "name": "kea",
       "description": "Sourced facts, decisions with revisit dates, scored predictions, a council of rival models and local search over your AI sessions: three skills and an MCP server.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "source": "./",
       "category": "productivity",
       "homepage": "https://github.com/jpsanders/kea"

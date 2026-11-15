@@ -2,6 +2,15 @@
 
 Versions follow [semantic versioning](https://semver.org). Tags carry the bare version, such as `1.0.0`.
 
+## 1.0.1 (2026-11-14)
+
+- kea is on PyPI as `kea-brain`: `uv tool install --python 3.15 kea-brain`, `pipx install kea-brain` or
+  `pip install kea-brain`. The command is still `kea`.
+- The Claude Code plugin starts its MCP server from the PyPI wheel (`uvx --from kea-brain==1.0.1`), which is faster
+  than building from git.
+- The release workflow publishes the wheel and the sdist that the GitHub release carries, through trusted publishing,
+  so no token is stored anywhere.
+
 ## 1.0.0 (2026-11-14)
 
 The first release.

@@ -13,7 +13,7 @@ server tries the default before the folders, and its initialize message names th
 
 If `kea` is not installed: update uv (`uv self update`, or `brew upgrade uv` or `pip install -U uv` when uv came that
 way; an older uv only knows the 3.15 previews), then
-`uv tool install --python 3.15 git+https://github.com/jpsanders/kea`.
+`uv tool install --python 3.15 kea-brain`.
 If there is no brain yet, ask the user where it should live, then `kea init <folder>`.
 
 ## Start of a session

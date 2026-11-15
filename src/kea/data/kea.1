@@ -24,7 +24,7 @@ kea is one Python package with no dependencies beyond the standard library. It r
 .RS 4
 .nf
 uv self update                                          # or brew upgrade uv, or pip install \-U uv
-uv tool install \-\-python 3.15 git+https://github.com/jpsanders/kea   # uv fetches Python 3.15 if missing
+uv tool install \-\-python 3.15 kea\-brain                # uv fetches Python 3.15 if missing
 kea init ~/brain                                        # make a brain; it becomes your default
 cd ~/brain && kea status                                # the whole brain at a glance
 kea skill install                                       # teach Claude Code, Codex and OpenCode
@@ -350,7 +350,7 @@ Cursor (~/.cursor/mcp.json) and Gemini CLI (~/.gemini/settings.json) take this J
 .fi
 .RE
 .PP
-Without kea installed, use \fBuvx\fR as the command and \fB\-\-python 3.15 \-\-from git+https://github.com/jpsanders/kea kea mcp\fR as the arguments; the first start downloads it, and an older uv knows only the 3.15 previews, so update uv first (QUICK START). Set \fBKEA_BRAIN\fR where the client starts servers outside your projects.
+Without kea installed, use \fBuvx\fR as the command and \fB\-\-python 3.15 \-\-from kea\-brain kea mcp\fR as the arguments; the first start downloads it, and an older uv knows only the 3.15 previews, so update uv first (QUICK START). Set \fBKEA_BRAIN\fR where the client starts servers outside your projects.
 .SH FILES
 .TP
 kea.toml

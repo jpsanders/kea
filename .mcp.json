@@ -6,7 +6,7 @@
         "--python",
         "3.15",
         "--from",
-        "git+https://github.com/jpsanders/kea@1.0.0",
+        "kea-brain==1.0.1",
         "kea",
         "mcp"
       ]

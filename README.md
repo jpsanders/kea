@@ -7,7 +7,8 @@
 
 <p align="center">
   <a href="https://github.com/jpsanders/kea/actions/workflows/dev.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/jpsanders/kea/dev.yml?branch=main&label=CI&logo=github"></a>
-  <a href="https://github.com/jpsanders/kea/releases/latest"><img alt="Release 1.0.0" src="https://img.shields.io/badge/release-1.0.0-a95719"></a>
+  <a href="https://github.com/jpsanders/kea/releases/latest"><img alt="Release 1.0.1" src="https://img.shields.io/badge/release-1.0.1-a95719"></a>
+  <a href="https://pypi.org/project/kea-brain/"><img alt="PyPI kea-brain" src="https://img.shields.io/pypi/v/kea-brain?label=pypi&color=a95719"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.15" src="https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white"></a>
   <a href="https://github.com/jpsanders/kea/blob/main/pyproject.toml"><img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-2e7d32"></a>
   <a href="https://github.com/jpsanders/kea#use-it-with-your-ai-agent"><img alt="MCP server" src="https://img.shields.io/badge/MCP-server-1c1611"></a>
@@ -31,7 +32,7 @@ and a Claude Code plugin.
 
 ```sh
 uv self update      # or brew upgrade uv, or pip install -U uv: an older uv knows only the 3.15 previews
-uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # fetches Python 3.15
+uv tool install --python 3.15 kea-brain   # fetches Python 3.15
 kea init ~/tidewater --example && cd ~/tidewater && kea status
 ```
 
@@ -172,7 +173,7 @@ args = ["mcp"]
 
 The JSON works for Cursor (`~/.cursor/mcp.json`) and Gemini CLI (`~/.gemini/settings.json`). For Claude Desktop, put
 the full path from `which kea` as the command, because it starts servers without your shell's PATH. Without kea
-installed, use `uvx` with `--python 3.15 --from git+https://github.com/jpsanders/kea kea mcp`, after updating uv as in
+installed, use `uvx` with `--python 3.15 --from kea-brain kea mcp`, after updating uv as in
 Install.
 
 An agent can read and keep the ledger, but two things stay yours: it can only rescan sources you added in a terminal,
@@ -192,9 +193,9 @@ and it can only send a council packet off your machine if your `kea.toml` says `
 ## Install
 
 ```sh
-uv tool install --python 3.15 git+https://github.com/jpsanders/kea   # recommended
-pipx install --python python3.15 git+https://github.com/jpsanders/kea
-pip install https://github.com/jpsanders/kea/releases/download/1.0.0/kea_brain-1.0.0-py3-none-any.whl
+uv tool install --python 3.15 kea-brain       # recommended
+pipx install --python python3.15 kea-brain
+pip install kea-brain                         # in a Python 3.15 environment
 docker build -t kea . && docker run --rm -it --user "$(id -u):$(id -g)" -v ~/brain:/brain kea status
 ```
 

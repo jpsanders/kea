@@ -6,7 +6,7 @@
 > sessions, ChatGPT and Claude exports, git history and notes. Python 3.15, no dependencies, MIT.
 
 Install: update uv (`uv self update`, or `brew upgrade uv` or `pip install -U uv`), then
-`uv tool install --python 3.15 git+https://github.com/jpsanders/kea`, `kea init ~/brain` and `kea skill install`.
+`uv tool install --python 3.15 kea-brain` (PyPI), `kea init ~/brain` and `kea skill install`.
 Agents: the `kea mcp` server, three skills (kea, kea-council, kea-frameworks), and a Claude Code plugin
 (`/plugin marketplace add jpsanders/kea`, then `/plugin install kea@kea`). Every command takes `--json`.
 

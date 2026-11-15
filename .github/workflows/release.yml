@@ -29,8 +29,7 @@ jobs:
           grep -q "badge/release-${TAG}-" README.md
           grep -q "\"version\": \"${TAG}\"" .claude-plugin/plugin.json
           grep -q "\"version\": \"${TAG}\"" .claude-plugin/marketplace.json
-          grep -q "kea@${TAG}\"" .mcp.json
-          grep -q "releases/download/${TAG}/kea_brain-${TAG}-py3-none-any.whl" README.md
+          grep -q "kea-brain==${TAG}\"" .mcp.json
           grep -q "^## ${TAG} " CHANGELOG.md
 
       - name: "Build the wheel and the sdist"
@@ -44,27 +43,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
 
-      - name: "Keep the files for the PyPI job"
-        uses: actions/upload-artifact@v7
-        with:
-          name: dist
-          path: dist/
 
-  # Publishes kea-brain to PyPI through trusted publishing. Off until the repository variable PUBLISH_TO_PYPI is
-  # "true" and pypi.org lists this workflow as a trusted publisher for the kea-brain project.
+  # Publishes kea-brain to PyPI through trusted publishing: PyPI trusts this workflow in this repository, so no token
+  # is stored anywhere. Off until the repository variable PUBLISH_TO_PYPI is "true".
   pypi:
     needs: assets
     if: ${{ vars.PUBLISH_TO_PYPI == 'true' }}
     runs-on: ubuntu-latest
-    environment: pypi
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kea-brain/
     permissions:
+      contents: read
       id-token: write
     steps:
-      - name: "Fetch the built files"
-        uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist/
+      - name: "Download the wheel and the sdist the release now carries"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release download "$TAG" -R "${{ github.repository }}" -D dist -p "kea_brain-*"
 
       - name: "Publish to PyPI"
         uses: pypa/gh-action-pypi-publish@release/v1

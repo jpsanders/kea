@@ -20,6 +20,6 @@ body:
     id: version
     attributes:
       label: kea, Python and operating system
-      placeholder: kea 1.0.0, Python 3.15.2 on Ubuntu 26.04
+      placeholder: kea 1.0.1, Python 3.15.2 on Ubuntu 26.04
     validations:
       required: true
