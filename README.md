@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/jpsanders/kea/actions/workflows/dev.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/jpsanders/kea/dev.yml?branch=main&label=CI&logo=github"></a>
   <a href="https://github.com/jpsanders/kea/releases/latest"><img alt="Release 1.0.1" src="https://img.shields.io/badge/release-1.0.1-a95719"></a>
-  <a href="https://pypi.org/project/kea-brain/"><img alt="PyPI kea-brain" src="https://img.shields.io/pypi/v/kea-brain?label=pypi&color=a95719"></a>
+  <a href="https://pypi.org/project/kea-brain/"><img alt="PyPI kea-brain" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fpypi.org%2Fpypi%2Fkea-brain%2Fjson&query=%24.info.version&label=pypi&logo=pypi&logoColor=white&color=a95719"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.15" src="https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white"></a>
   <a href="https://github.com/jpsanders/kea/blob/main/pyproject.toml"><img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-2e7d32"></a>
   <a href="https://github.com/jpsanders/kea#use-it-with-your-ai-agent"><img alt="MCP server" src="https://img.shields.io/badge/MCP-server-1c1611"></a>
