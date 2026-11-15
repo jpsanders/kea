@@ -1371,3 +1371,29 @@ def test_init_names_a_dangling_link_and_what_force_left_in_a_linked_folder(
     code, out, _ = run("init", str(brain.root), "--force", "--no-git", "--no-default")
     assert code == 0 and "council/ is a link" in out and "council/roster.toml" in out
     assert (shared / "roster.toml").read_text() != ""
+
+
+# ---------------------------------------------------------------- found by CI on macOS
+
+
+def test_a_reset_while_reading_an_error_body_is_a_seat_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import urllib.error
+    from email.message import Message
+
+    class Reset(io.RawIOBase):
+        def readable(self) -> bool:
+            return True
+
+        def read(self, size: int = -1) -> bytes:
+            raise ConnectionResetError(54, "Connection reset by peer")
+
+    def fail(*args: Any, **kwargs: Any) -> str:
+        body: Any = Reset()
+        raise urllib.error.HTTPError("https://example.invalid/v1", 503, "Service Unavailable", Message(), body)
+
+    monkeypatch.setattr(providers, "_call", fail)
+    monkeypatch.setattr("kea.providers.time.sleep", lambda s: None)
+    monkeypatch.setenv("K", "k")
+    seat = Seat.from_config({"name": "r", "base_url": "https://example.invalid/v1", "model": "m", "key_env": "K"})
+    with pytest.raises(ProviderError, match="HTTP 503: the server closed the connection"):
+        providers.complete(seat, "s", "u", retries=2)

@@ -10,6 +10,8 @@ Versions follow [semantic versioning](https://semver.org). Tags carry the bare v
   than building from git.
 - The release workflow publishes the wheel and the sdist that the GitHub release carries, through trusted publishing,
   so no token is stored anywhere.
+- A council seat whose server drops the connection while sending an error ends as a seat error with the HTTP status,
+  instead of an unhandled connection error; kea reads at most 4 KB of an error message.
 
 ## 1.0.0 (2026-11-14)
 

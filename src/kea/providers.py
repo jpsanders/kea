@@ -300,7 +300,9 @@ def complete(
             return out
         except urllib.error.HTTPError as exc:
             try:
-                detail = redact(exc.read().decode(errors="replace"))[:300]
+                detail = redact(exc.read(4096).decode(errors="replace"))[:300]
+            except OSError, http.client.HTTPException:
+                detail = "the server closed the connection before its error message"
             finally:
                 exc.close()
             last = f"HTTP {exc.code}: {detail}"
