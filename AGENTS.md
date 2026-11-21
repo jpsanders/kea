@@ -9,6 +9,7 @@ brain, read that brain's own AGENTS.md, or the skill in `skills/kea/SKILL.md`.)
 make init-dev     # install kea and the development tools into the active environment (Python 3.15)
 make format       # apply black and isort
 make checks       # every check CI runs, in CI's order; run it before you say a change is done
+make ruru         # ruru reviews your branch against main: tamper audit, fail first, mutants (in checks)
 make man          # rebuild the man page, the packaged manual and the packaged skills
 make bench        # start up and command times
 make demo         # the example brain in /tmp/kea-demo
